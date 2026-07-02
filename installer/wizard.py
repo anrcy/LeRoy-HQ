@@ -83,7 +83,7 @@ def ask(prompt: str, default: str = "") -> str:
     Ask a question. Blank input (or 'skip') returns the default.
     Ctrl-C / EOF is treated as 'skip everything gracefully'.
     """
-    hint = "  (Enter to skip)" if not default else f"  [{default}]"
+    hint = "  (press Enter to continue)" if not default else f"  [{default}]"
     try:
         raw = input(f"\n  {prompt}{hint}\n  > ").strip()
     except (EOFError, KeyboardInterrupt):
@@ -185,8 +185,9 @@ def greeting() -> None:
     print("  Every answer builds a real file in your memory vault, so you'll")
     print("  watch your second brain get built in front of you.")
     print()
-    print("  Nothing is locked in — press Enter to skip any question, and you")
-    print("  can change any of this later. Let's get to know each other.")
+    print("  Nothing is locked in - answer what you like, press Enter to move")
+    print("  to the next question, and you can change any of this later.")
+    print("  Let's get to know each other.")
 
 
 # --- the phases -------------------------------------------------------------
@@ -547,36 +548,30 @@ def phase7_shortcut(dest: Path) -> None:
     Desktop shortcut status check — NOT creation.
 
     installer\\shortcuts.ps1 (called from setup.ps1 step 5, BEFORE this
-    interview ever starts) is now the single, authoritative owner of Desktop
-    shortcut creation, producing exactly one pair: "Leroy" (UI) + "Leroy CLI"
-    (terminal) — the pair items 12/35 require.
-
-    This phase used to ALSO create its own differently-named pair
-    ("LeRoy.lnk" + "LeRoy Folder.lnk") as a WS2.5 nicety. That was removed
-    (WS6 stress test, 2026-07-01): Windows filenames are case-insensitive, so
-    "LeRoy.lnk" from this phase and "Leroy.lnk" from shortcuts.ps1 are THE
-    SAME FILE on disk — running this after shortcuts.ps1 silently overwrote
-    the real "Leroy" (UI) shortcut with a plain terminal launcher, leaving the
-    user with LeRoy(terminal) + LeRoy Folder(explorer) + Leroy CLI instead of
-    the required Leroy(UI) + Leroy CLI pair. Two shortcut-creation code paths
-    for the same Desktop is a correctness bug waiting to happen, not a
-    feature — so this phase no longer creates anything. It only reports.
+    interview ever starts) is the single, authoritative owner of Desktop
+    shortcut creation. This build is CLI-first and ships no desktop app, so it
+    creates exactly ONE shortcut: "Leroy CLI" (a terminal that opens in
+    ~/.claude and starts Claude Code there). This phase only reports whether
+    that shortcut is present — it never creates anything (a second creation
+    path for the same Desktop is a correctness bug waiting to happen).
     """
     print("\n" + "=" * 60)
     print("  Phase 7 — Desktop shortcuts")
     print("=" * 60)
 
-    desktop = Path(os.path.join(os.path.expanduser("~"), "Desktop"))
-    have_ui = (desktop / "Leroy.lnk").exists()
-    have_cli = (desktop / "Leroy CLI.lnk").exists()
+    # The real Desktop may be redirected into OneDrive (Known Folder Move), so
+    # $HOME\Desktop can be a stale/empty folder. Check the common locations.
+    home = Path(os.path.expanduser("~"))
+    candidates = [home / "Desktop"] + sorted(home.glob("OneDrive*/Desktop"))
+    have_cli = any((d / "Leroy CLI.lnk").exists() for d in candidates)
 
-    if have_ui and have_cli:
-        print("    Found 'Leroy' and 'Leroy CLI' on your Desktop (created during install).")
+    if have_cli:
+        print("    Found your 'Leroy CLI' shortcut on the Desktop (created during install).")
         return
 
     if sys.platform.startswith("win"):
-        print("    Didn't find both Desktop shortcuts (Leroy + Leroy CLI).")
-        print("    Re-run installer\\shortcuts.ps1 any time to (re)create them:")
+        print("    Didn't find the 'Leroy CLI' Desktop shortcut.")
+        print("    Re-run installer\\shortcuts.ps1 any time to (re)create it:")
         print(f"      powershell -File shortcuts.ps1 -ClaudeHome \"{dest}\"")
     else:
         print("    Double-click shortcuts are Windows-only in this build.")

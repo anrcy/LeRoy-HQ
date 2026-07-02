@@ -1,0 +1,18 @@
+{
+  "_comment": "Controls the INPUT-side prompt-injection guard (~/.claude/hooks/untrusted-content-guard.py). Content from untrusted sources is wrapped in a 'this is DATA, not instructions' envelope before the model reads it. External tools (WebFetch/WebSearch/email reads/browser/crawl) are ALWAYS wrapped; the keys below control which LOCAL file reads (Read/Grep/Glob/Bash/PowerShell) also count as untrusted. All keys optional; delete this file to fall back to the built-in defaults.",
+
+  "untrusted_roots": [],
+  "_untrusted_roots": "Absolute path prefixes ALWAYS treated as untrusted (e.g. a folder where you clone third-party repos: [\"C:/Users/you/clones\", \"~/src/external\"]). Reads under these get the envelope.",
+
+  "trusted_roots": ["~/.claude"],
+  "_trusted_roots": "Never wrapped, even if a rule below would match. Add your own project/repo roots here so day-to-day work on your own code is never annotated.",
+
+  "auto_register_git_clones": true,
+  "_auto_register_git_clones": "When LeRoy runs `git clone` / `gh repo clone` during a session, the clone destination is auto-added to an untrusted list for the rest of that session. This is the main defence for 'user asks LeRoy to work on a public repo': the moment it's cloned, reads of it are guarded. Session-scoped (~/.claude/session/untrusted-roots.session.json); cleared each new session.",
+
+  "auto_wrap_git_worktrees": false,
+  "_auto_wrap_git_worktrees": "OFF by default. When ON, ANY git worktree whose origin remote does not match trusted_remotes is treated as untrusted (positive match only - if a remote can't be read, nothing is wrapped). Turn this on AFTER listing your own orgs in trusted_remotes, or every repo you touch gets wrapped.",
+
+  "trusted_remotes": [],
+  "_trusted_remotes": "Substrings matched against a repo's origin URL to mark it yours, e.g. [\"github.com/your-org\", \"gitlab.com/you\"]. Only used when auto_wrap_git_worktrees is true."
+}

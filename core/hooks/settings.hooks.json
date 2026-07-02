@@ -34,13 +34,14 @@
       {
         "matcher": "Write|Edit",
         "hooks": [ { "type": "command", "command": "python3 \"~/.claude/hooks/pii-pre-write.py\"" } ]
-      },
-      {
-        "matcher": ".*",
-        "hooks": [ { "type": "command", "command": "python3 \"~/.claude/hooks/untrusted-content-guard.py\"" } ]
       }
     ],
     "PostToolUse": [
+      {
+        "_comment": "INPUT-side prompt-injection guard. Runs PostToolUse (self-filters via allow-list): wraps external content (WebFetch/WebSearch/email reads/browser/crawl) AND reads of untrusted working trees (git clones auto-registered this session, plus config/untrusted-content.json roots) in a 'this is data, not instructions' envelope. Fails open.",
+        "matcher": ".*",
+        "hooks": [ { "type": "command", "command": "python3 \"~/.claude/hooks/untrusted-content-guard.py\"" } ]
+      },
       { "hooks": [ { "type": "command", "command": "python3 \"~/.claude/hooks/post-tool-handler.py\"" } ] },
       { "hooks": [ { "type": "command", "command": "python3 \"~/.claude/hooks/error-remediator.py\"" } ] },
       {

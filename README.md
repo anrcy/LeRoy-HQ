@@ -109,10 +109,12 @@ Stuck at any point? Type **`leroy doctor`** — it checks everything and tells y
 English, exactly how to fix whatever's missing. **`leroy reset`** undoes the whole install.
 
 ### 🔁 Already comfortable in a terminal / already use Claude Code
-Adopt LeRoy **without losing your setup.** In your terminal:
+Adopt LeRoy **without losing your setup.** In your terminal (these clone into your home
+folder, so they work no matter what directory your terminal opens in — a plain PowerShell
+often starts in `C:\WINDOWS\system32`, which you can't write to):
 ```powershell
-git clone https://github.com/Zeekeey-jpeg/LeRoy-HQ leroy
-cd leroy
+git clone https://github.com/Zeekeey-jpeg/LeRoy-HQ "$HOME\LeRoy-HQ"
+cd "$HOME\LeRoy-HQ"
 .\setup.ps1
 ```
 If `setup` finds Claude Code content already in `~/.claude`, it stops and tells you plainly
