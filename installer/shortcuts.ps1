@@ -27,6 +27,14 @@
 
     Idempotent: re-running overwrites the .lnk cleanly.
 
+    APPEARANCE-SAFE: this script only READS the Desktop location + an icon
+    reference and WRITES a single .lnk file. It never changes wallpaper, theme,
+    colors, DWM, or Explorer settings, never calls SystemParametersInfo, and
+    never restarts Explorer. (If the wallpaper briefly renders black behind the
+    icons right after a new shortcut appears, that's a transient Explorer/DWM
+    desktop repaint - nothing here changed a setting; a desktop Refresh, an
+    Explorer restart, or the next sign-in restores it.)
+
 .PARAMETER ClaudeHome
     The user's ~\.claude directory (defaults to $HOME\.claude).
 

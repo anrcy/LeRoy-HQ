@@ -28,6 +28,7 @@ from __future__ import annotations
 import argparse
 import datetime as _dt
 import json
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -101,12 +102,67 @@ def _merge_hooks(user_hooks: dict, overlay_hooks: dict) -> dict:
     return merged
 
 
+# --- hook wiring (settings.hooks.json -> settings.json) ---------------------
+def hooks_overlay_path(source: Path) -> Path:
+    """The overlay's hook-wiring file, which ships next to the hook scripts."""
+    return source / "hooks" / "settings.hooks.json"
+
+
+def rewrite_hook_command(cmd: str, interpreter: str | None, claude_home: Path) -> str:
+    """
+    Make a shipped hook command runnable on THIS machine:
+      * `python3`/`python` -> the absolute interpreter that ran the installer
+        (Windows usually has no `python3` on PATH), quoted for spaces.
+      * `~/.claude` / `~\\.claude` -> the absolute config dir (Claude Code does
+        not expand `~` inside a hook command string).
+    Deterministic, so re-running the merge produces byte-identical commands and
+    _merge_hooks dedups instead of duplicating.
+    """
+    if not isinstance(cmd, str):
+        return cmd
+    out = cmd
+    if interpreter:
+        out = re.sub(
+            r"^(\s*)(?:python3|python)(\s+)",
+            lambda m: f'{m.group(1)}"{interpreter}"{m.group(2)}',
+            out,
+            count=1,
+        )
+    ch = str(claude_home)
+    out = out.replace("~/.claude", ch).replace("~\\.claude", ch)
+    return out
+
+
+def rewrite_hooks(hooks_dict: dict, interpreter: str | None, claude_home: Path) -> dict:
+    """Return a copy of the overlay hooks with every command rewritten."""
+    result: dict = {}
+    for event, entries in hooks_dict.items():
+        new_entries = []
+        for entry in entries if isinstance(entries, list) else []:
+            e = dict(entry) if isinstance(entry, dict) else entry
+            if isinstance(e, dict) and isinstance(e.get("hooks"), list):
+                e["hooks"] = [
+                    {**h, "command": rewrite_hook_command(h["command"], interpreter, claude_home)}
+                    if isinstance(h, dict) and isinstance(h.get("command"), str)
+                    else h
+                    for h in e["hooks"]
+                ]
+            new_entries.append(e)
+        result[event] = new_entries
+    return result
+
+
+def _count_hook_entries(hooks_dict: dict) -> int:
+    return sum(len(v) for v in hooks_dict.values() if isinstance(v, list))
+
+
 # --- the merge engine -------------------------------------------------------
 class MergePlan:
     def __init__(self) -> None:
         self.new_files: list[Path] = []      # relative paths to be copied
         self.skipped: list[Path] = []        # already exist, left untouched
         self.settings_merge: str | None = None  # human summary of settings action
+        self.hooks_merge: str | None = None  # human summary of hook-wiring action
 
 
 def build_plan(source: Path, dest: Path) -> MergePlan:
@@ -138,6 +194,21 @@ def build_plan(source: Path, dest: Path) -> MergePlan:
             plan.settings_merge = "deep-merge into existing settings.json (user values win, hooks appended)"
         else:
             plan.settings_merge = "create settings.json from overlay (no existing file)"
+
+    # Plan the hook wiring: settings.hooks.json is merged INTO settings.json so
+    # Claude Code actually loads LeRoy's hooks (copying it to hooks/ alone does
+    # nothing - Claude Code only reads settings.json).
+    hooks_src = hooks_overlay_path(source)
+    if hooks_src.exists():
+        try:
+            ov = json.loads(hooks_src.read_text(encoding="utf-8"))
+            n = _count_hook_entries(ov.get("hooks", {}))
+            plan.hooks_merge = (
+                f"wire {n} hook group(s) from hooks/settings.hooks.json into "
+                "settings.json (interpreter + ~/.claude paths rewritten; your own hooks preserved)"
+            )
+        except Exception:
+            plan.hooks_merge = "hooks/settings.hooks.json present but unreadable - will skip (hooks stay inert)"
     return plan
 
 
@@ -153,7 +224,7 @@ def backup(dest: Path, dry_run: bool) -> Path | None:
     return backup_dir
 
 
-def apply_plan(source: Path, dest: Path, plan: MergePlan) -> None:
+def apply_plan(source: Path, dest: Path, plan: MergePlan, interpreter: str | None) -> None:
     """Execute the merge for real (caller must have backed up first)."""
     dest.mkdir(parents=True, exist_ok=True)
     for rel in plan.new_files:
@@ -162,18 +233,29 @@ def apply_plan(source: Path, dest: Path, plan: MergePlan) -> None:
         tgt.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src, tgt)
 
-    # settings.json — merge or create.
+    # settings.json - start from the user's existing settings (or empty), then
+    # apply the root overlay (if any) and the hook wiring. Written once at the
+    # end so a hooks-only overlay still produces a settings.json.
+    dst_settings = dest / "settings.json"
+    user = _load_json(dst_settings) if dst_settings.exists() else {}
+    changed = False
+
     src_settings = source / "settings.json"
     if src_settings.exists():
-        overlay = _load_json(src_settings)
-        dst_settings = dest / "settings.json"
-        if dst_settings.exists():
-            user = _load_json(dst_settings)
-            merged = merge_settings(user, overlay)
-        else:
-            merged = overlay
+        user = merge_settings(user, _load_json(src_settings))
+        changed = True
+
+    hooks_src = hooks_overlay_path(source)
+    if hooks_src.exists():
+        overlay_hooks = _load_json(hooks_src).get("hooks", {})
+        if isinstance(overlay_hooks, dict) and overlay_hooks:
+            rewritten = rewrite_hooks(overlay_hooks, interpreter, dest)
+            user = merge_settings(user, {"hooks": rewritten})
+            changed = True
+
+    if changed:
         dst_settings.write_text(
-            json.dumps(merged, indent=2, ensure_ascii=False) + "\n",
+            json.dumps(user, indent=2, ensure_ascii=False) + "\n",
             encoding="utf-8",
         )
 
@@ -216,6 +298,8 @@ def print_plan(plan: MergePlan, source: Path, dest: Path, dry_run: bool, backup_
         print(f"  {MERGE} settings.json: {plan.settings_merge}")
     else:
         print("  (no settings.json in overlay)")
+    if plan.hooks_merge:
+        print(f"  {MERGE} hooks: {plan.hooks_merge}")
     print("  " + "-" * 60)
     if dry_run:
         print("  Dry run complete. Re-run without --dry-run to apply.\n")
@@ -239,9 +323,13 @@ def main(argv: list[str] | None = None) -> int:
         print(f"\n  merge aborted: {e}\n")
         return 1
 
+    # The interpreter that ran this installer is the one we wire hooks to run
+    # under - most robust (no dependency on `python3` being on PATH).
+    interpreter = sys.executable or None
+
     backup_dir = backup(dest, dry_run=args.dry_run)
     if not args.dry_run:
-        apply_plan(source, dest, plan)
+        apply_plan(source, dest, plan, interpreter)
     print_plan(plan, source, dest, args.dry_run, backup_dir)
     return 0
 

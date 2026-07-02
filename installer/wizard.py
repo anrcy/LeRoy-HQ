@@ -77,6 +77,23 @@ def slug(text: str) -> str:
     return s or "untitled"
 
 
+def _desktop_dir() -> Path:
+    """The real per-user Desktop. On Windows this is read from the shell-folders
+    registry, so it's correct whether the Desktop is the plain ~/Desktop or has
+    been redirected (e.g. by OneDrive) - no OneDrive-specific guessing. Falls
+    back to ~/Desktop everywhere else."""
+    if sys.platform.startswith("win"):
+        try:
+            import winreg
+            sub = r"Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders"
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, sub) as k:
+                val, _ = winreg.QueryValueEx(k, "Desktop")
+            return Path(os.path.expandvars(val))
+        except Exception:
+            pass
+    return Path(os.path.expanduser("~")) / "Desktop"
+
+
 # --- prompt helpers ---------------------------------------------------------
 def ask(prompt: str, default: str = "") -> str:
     """
@@ -559,11 +576,7 @@ def phase7_shortcut(dest: Path) -> None:
     print("  Phase 7 — Desktop shortcuts")
     print("=" * 60)
 
-    # The real Desktop may be redirected into OneDrive (Known Folder Move), so
-    # $HOME\Desktop can be a stale/empty folder. Check the common locations.
-    home = Path(os.path.expanduser("~"))
-    candidates = [home / "Desktop"] + sorted(home.glob("OneDrive*/Desktop"))
-    have_cli = any((d / "Leroy CLI.lnk").exists() for d in candidates)
+    have_cli = (_desktop_dir() / "Leroy CLI.lnk").exists()
 
     if have_cli:
         print("    Found your 'Leroy CLI' shortcut on the Desktop (created during install).")
