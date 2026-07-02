@@ -54,53 +54,26 @@ you › draft the follow-up to yesterday's proposal
 ◆ done. draft written in your voice, parked in Drafts. logged to memory.
 ```
 
-### 🕐 Recent
-- **2026-07-01** — Doc-RAG ingestion pipeline shipped: drop in a PDF/DOCX, chat over it now, remembered forever.
-- **2026-07-01** — Scaling protocol documented ([docs/scaling.md](docs/scaling.md)) — tiers, topology, A2A mesh, CTO flight plans.
-- **2026-07-01** — MCP-builder + `_template/` published — LeRoy builds its own connectors on demand.
-
-### By the numbers
-**1,063** gate checks at **100%** compliance in daily use · warm recall **3251ms → 1622ms** ·
-A2A mesh **2–10×** speedup on parallel work · **27** agents across **5** governed tiers ·
-your memory is **100% yours** — plain markdown on your disk.
-
-**Tested + audited:** a dedicated `simulator` agent runs the protocol-compliance harness —
-**1,063 gate checks logged at 100% compliance** is our eval story, not a slogan. And every
-run leaves a trail: a **gate log**, an **automation registry**, and a **decisions ledger** you
-can `grep` after the fact.
-
 ---
 
 ## 🚦 Choose your path
 
-> ### 👉 First — where do these commands go?
-> LeRoy runs on **[Claude Code](https://www.anthropic.com/claude-code)**, Anthropic's free
-> command-line tool. You type the commands below into your computer's **terminal** — **not** the
-> Claude desktop app and **not** the Claude website.
-> - **Windows:** click **Start**, type **PowerShell**, press Enter. That window is your terminal.
->
-> Then paste the lines **one at a time**, pressing Enter after each. No coding required.
-
 ### 🌱 New here (never touched a terminal — that's totally fine)
-You'll be talking to your AI company in about 15 minutes.
+You'll be talking to your AI company in about 15 minutes. No coding required.
 
-**1. Open your terminal** — PowerShell on Windows (see the box above).
-**2. Run the one-liner** — this is the whole install:
-```powershell
-irm https://raw.githubusercontent.com/Zeekeey-jpeg/LeRoy-HQ/main/install.ps1 | iex
-```
-That single command checks for `git` (telling you plainly how to get it if it's missing),
-clones LeRoy into **`%USERPROFILE%\LeRoy-HQ`**, hands off to its own setup (which checks the
-rest of your prerequisites — Claude Code, Node, Python — creates your `.claude` folder, and
-merges LeRoy in), puts a **Leroy CLI** shortcut on your Desktop, and launches your first
-session automatically.
+1. Press **Start**.
+2. Type **PowerShell**.
+3. Hit **Enter**. The window that opens is your terminal (your **CLI**).
+4. Paste this in there and hit **Enter**:
+   ```powershell
+   irm https://raw.githubusercontent.com/Zeekeey-jpeg/LeRoy-HQ/main/install.ps1 | iex
+   ```
+5. Follow the prompts.
+6. **BAM — that's it.**
 
-**3. Say hi:**
-> **`hi, I'm new`**
-
-That greeting kicks off a short, friendly interview — LeRoy asks a few questions about you and
-your work and builds your memory (your profile, your projects, your people) as you answer. No
-jargon, nothing to memorize.
+The installer handles everything, puts a **Leroy CLI** shortcut on your Desktop, and launches
+your first session. Onboarding starts on its own — LeRoy asks a few questions about you and
+your work, and builds your memory as you answer.
 
 **From here on, you don't run any commands — you use your shortcut.** Double-click
 **Leroy CLI** whenever you want to talk to LeRoy again.
@@ -151,18 +124,18 @@ turn it off the same way anytime.
 
 </details>
 
-> **Requires:** a Claude subscription (heavy/autonomous use → Max tier). Node 18+, Python 3.11+,
-> and git — `leroy doctor` verifies all of this for you. **Windows-only today**; macOS/Linux
-> are on the roadmap, not shipped.
->
-> **Recommended model:** **Claude Sonnet** — the best balance of speed, cost, and capability
-> for day-to-day LeRoy use. Switch anytime in Claude Code (`/model`); the boardroom can still
-> pin high-stakes calls to a top-tier model when it matters.
->
-> **No login, no account needed — LeRoy runs entirely on your machine.** There's no cloud
-> service and nothing to sign into: it's local-to-local by design, and you talk to it through
-> the CLI. If you ever expose anything beyond your own machine (e.g. Tailscale Funnel), read
-> the warning in `AUTH-SETUP.md` first — it is not designed for open internet exposure.
+**Requires:** a Claude subscription (heavy/autonomous use → Max tier). Node 18+, Python 3.11+,
+and git — `leroy doctor` verifies all of this for you. **Windows-only today**; macOS/Linux
+are on the roadmap, not shipped.
+
+**Recommended model:** **Claude Sonnet** — the best balance of speed, cost, and capability
+for day-to-day LeRoy use. Switch anytime in Claude Code (`/model`); the boardroom can still
+pin high-stakes calls to a top-tier model when it matters.
+
+**No login, no account needed — LeRoy runs entirely on your machine.** There's no cloud
+service and nothing to sign into: it's local-to-local by design, and you talk to it through
+the CLI. If you ever expose anything beyond your own machine (e.g. Tailscale Funnel), read
+the warning in `AUTH-SETUP.md` first — it is not designed for open internet exposure.
 
 ### 💳 Which Claude plan?
 LeRoy runs on a **Claude subscription** — interactive, hands-on use is comfortable on
@@ -172,6 +145,23 @@ clock), we recommend **Claude Max (~$100/mo)** so background work doesn't crowd 
 **No local model required.** Everything runs on your Claude plan out of the box. A local model
 (e.g. [Ollama](https://ollama.com)) is **optional** — add one and LeRoy will offload cheap
 background work to it for free; skip it and nothing breaks, it just all runs on Claude.
+
+---
+
+### 🕐 Recent
+- **2026-07-01** — Doc-RAG ingestion pipeline shipped: drop in a PDF/DOCX, chat over it now, remembered forever.
+- **2026-07-01** — Scaling protocol documented ([docs/scaling.md](docs/scaling.md)) — tiers, topology, A2A mesh, CTO flight plans.
+- **2026-07-01** — MCP-builder + `_template/` published — LeRoy builds its own connectors on demand.
+
+### By the numbers
+**1,063** gate checks at **100%** compliance in daily use · warm recall **3251ms → 1622ms** ·
+A2A mesh **2–10×** speedup on parallel work · **27** agents across **5** governed tiers ·
+your memory is **100% yours** — plain markdown on your disk.
+
+**Tested + audited:** a dedicated `simulator` agent runs the protocol-compliance harness —
+**1,063 gate checks logged at 100% compliance** is our eval story, not a slogan. And every
+run leaves a trail: a **gate log**, an **automation registry**, and a **decisions ledger** you
+can `grep` after the fact.
 
 ---
 
