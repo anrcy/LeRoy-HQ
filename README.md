@@ -333,8 +333,8 @@ over minutes later.
 ### Memory backends — pluggable
 LeRoy works **out of the box** with its plain-file Obsidian vault + local RAG sidecar — no
 database, no cloud, nothing to set up. But memory is a **pluggable backend.** If you'd rather
-back your recall with an external store, plug one in via `leroy mcp add` — e.g. **[cognee](https://github.com/topoteretes/cognee)**
-(which ships its own MCP server), **Neo4j**, or **pgvector**. The vault stays the source of
+back your recall with an external store, plug one in via `leroy mcp add` — e.g. **Neo4j** or
+**pgvector**. The vault stays the source of
 truth on your disk; the external store becomes an additional recall layer. Optional, one command,
 swap it any time.
 
