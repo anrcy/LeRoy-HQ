@@ -61,6 +61,9 @@ you › draft the follow-up to yesterday's proposal
 ### 🌱 New here (never touched a terminal — that's totally fine)
 You'll be talking to your AI company in about 15 minutes. No coding required.
 
+> 🌟 **About to install?** Scroll up and hit **Star** first — it takes one click and helps
+> other people stumble onto this the way you just did.
+
 1. Press **Start**.
 2. Type **PowerShell**.
 3. Hit **Enter**. The window that opens is your terminal (your **CLI**).
@@ -263,6 +266,17 @@ Every request enters one front door (the **COO**). It sizes the job and answers,
 or deploys a team. Agents also talk **peer-to-peer** (A2A mesh — DELEGATE / SUBSCRIBE / CACHE,
 with hop limits + circuit breakers) for 2–10× speedup on big jobs. LeRoy scales the crew to
 the *shape* of the work — see [docs/scaling.md](docs/scaling.md).
+
+```mermaid
+flowchart TD
+    User(["You"]) --> COO["COO — one front door"]
+    COO --> T1["Tier 1 · Executive — COO · CTO · CFO · CKO"]
+    COO --> T3["Tier 3 · Management — Chief-of-Staff · Scrum · Tech-Lead · Secretary"]
+    T1 --> T2["Tier 2 · Leadership — VP-Eng · HR"]
+    T3 --> T4["Tier 4 · Specialists — Builder · Designer · Forge · Guardian · Janitor · Legal"]
+    T3 -.A2A mesh.-> T5["Tier 5 · Support — Scout · Planner · Quick · Skill-Matcher · Mesh"]
+    T4 -.A2A mesh.-> T5
+```
 
 <details>
 <summary><b>See the full tier table</b></summary>

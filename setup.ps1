@@ -177,3 +177,12 @@ Write-Host "  |  (Open a NEW terminal so 'leroy' is on your PATH.)           |" 
 Write-Host "  |  From here on, use your 'Leroy CLI' Desktop shortcut.        |" -ForegroundColor Green
 Write-Host "  +--------------------------------------------------------------+" -ForegroundColor Green
 Write-Host ""
+
+# --- Star nudge --------------------------------------------------------------
+Write-Host "  If LeRoy earns its keep, a star helps other people find it:" -ForegroundColor Yellow
+Write-Host "    https://github.com/Zeekeey-jpeg/LeRoy-HQ" -ForegroundColor Yellow
+$openStar = Read-Host "  Open that page in your browser now? (y/N)"
+if ($openStar -match '^[Yy]') {
+    Start-Process "https://github.com/Zeekeey-jpeg/LeRoy-HQ"
+}
+Write-Host ""
