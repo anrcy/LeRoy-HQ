@@ -61,8 +61,7 @@ you › draft the follow-up to yesterday's proposal
 ### 🌱 New here (never touched a terminal — that's totally fine)
 You'll be talking to your AI company in about 15 minutes. No coding required.
 
-> 🌟 **About to install?** Scroll up and hit **Star** first — it takes one click and helps
-> other people stumble onto this the way you just did.
+### 🌟 About to install? Scroll up and hit **Star** first — one click, and it helps other people stumble onto this the way you just did.
 
 1. Press **Start**.
 2. Type **PowerShell**.
