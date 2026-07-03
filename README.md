@@ -269,13 +269,52 @@ the *shape* of the work — see [docs/scaling.md](docs/scaling.md).
 
 ```mermaid
 flowchart TD
-    User(["You"]) --> COO["COO — one front door"]
-    COO --> T1["Tier 1 · Executive — COO · CTO · CFO · CKO"]
-    COO --> T3["Tier 3 · Management — Chief-of-Staff · Scrum · Tech-Lead · Secretary"]
-    T1 --> T2["Tier 2 · Leadership — VP-Eng · HR"]
-    T3 --> T4["Tier 4 · Specialists — Builder · Designer · Forge · Guardian · Janitor · Legal"]
-    T3 -.A2A mesh.-> T5["Tier 5 · Support — Scout · Planner · Quick · Skill-Matcher · Mesh"]
-    T4 -.A2A mesh.-> T5
+    COO["🧭 COO — one front door"]
+
+    COO --> T1
+    subgraph T1["Tier 1 · Executive — govern only"]
+        direction LR
+        CTO["CTO"]
+        CFO["CFO"]
+        CKO["CKO"]
+    end
+
+    T1 --> T2
+    subgraph T2["Tier 2 · Leadership"]
+        direction LR
+        VPE["VP-Eng"]
+        HR["HR"]
+    end
+
+    T2 --> T3
+    subgraph T3["Tier 3 · Management"]
+        direction LR
+        COS["Chief-of-Staff"]
+        SCR["Scrum"]
+        TL["Tech-Lead"]
+        SEC["Secretary"]
+    end
+
+    T3 --> T4
+    subgraph T4["Tier 4 · Specialists — write code"]
+        direction LR
+        BLD["Builder"]
+        DSN["Designer"]
+        FRG["Forge"]
+        GRD["Guardian"]
+        JAN["Janitor"]
+        LGL["Legal"]
+    end
+
+    T4 --> T5
+    subgraph T5["Tier 5 · Support — fast helpers"]
+        direction LR
+        SCT["Scout"]
+        PLN["Planner"]
+        QCK["Quick"]
+        SKM["Skill-Matcher"]
+        MSH["Mesh"]
+    end
 ```
 
 <details>
