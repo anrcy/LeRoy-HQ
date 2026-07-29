@@ -46,6 +46,7 @@ Skills about managing skills, permissions, disambiguation, and universal pattern
 | skill vs memory, what is skill, what is memory, knowledge management, graduation | skill-vs-memory.md |
 | memory consolidate, write notes, checkpoint to vault | memory-consolidation.md |
 | memory recall, load notes, auto-recall, session start | memory-recall.md |
+| memory deprecation, MEMORY.md too big, long vs short term memory, memory tiers, RAG integration | memory-lifecycle.md |
 | memory cleanup, organize vault, archive notes, weekly cleanup | memory-organizer.md |
 | error recall, check errors, known failures, prevent errors | error-recall.md |
 | workflow complexity, scoring, threshold, automation | workflow-complexity-classifier.md |
@@ -79,7 +80,7 @@ Skills about managing skills, permissions, disambiguation, and universal pattern
 | deadline calendar, auto calendar, deadline to event | deadline-calendar-automation.md |
 | skill composer, auto skill, simple skill, quick skill | skill-composer.md |
 | kb ingestion, data dump, integrate docs, parse knowledge | kb-auto-ingestion-protocol.md |
-| debate, council debate, decide, dilemma, torn between, should I | debate-by-brian.md |
+| debate, council debate, decide, dilemma, torn between, should I | debate-by-council.md |
 
 ## Available Skills
 
@@ -138,6 +139,7 @@ Skills about managing skills, permissions, disambiguation, and universal pattern
 ### Memory System
 - **memory-consolidation.md** - Checkpoint → Obsidian writes, auto-triggered consolidation, workflow_metadata support
 - **memory-recall.md** - v5.1 auto-recall, smart filtering, tiered loading, suggestion surfacing integration
+- **memory-lifecycle.md** - 4-tier model (identity/hot index/warm notes/cold vault), deprecation ladder, MEMORY.md byte budget, Tier-C RAG gap
 - **memory-organizer.md** - Weekly vault cleanup, archive old notes, consolidate duplicates
 - **memory-system-overview.md** - Complete memory architecture overview, vault structure, integration patterns
 - **memory-hierarchy-implementation.md** - Tier system for memory loading, priority-based recall
@@ -177,4 +179,4 @@ Skills about managing skills, permissions, disambiguation, and universal pattern
 - [quick-trigger-registry.md](quick-trigger-registry.md) — Complete quick-trigger table
 
 ## Archived (2026-07-15)
-- **predictive-todo-system.md** → moved to `skills/_archive/`. Mostly-unbuilt design doc (Phases 2-4 marked pending), unwired to any live trigger. Superseded in spirit by `skills/routines/smart-todos.md` (live, single source of truth for the personal/YourCo mixed todo list). See `memory/Projects/Personal/index.md` for the live system.
+- **predictive-todo-system.md** → moved to `skills/_archive/`. Mostly-unbuilt design doc (Phases 2-4 marked pending), unwired to any live trigger. Superseded in spirit by `skills/routines/smart-todos.md` (live, single source of truth for the mixed personal/work todo list). See `memory/Projects/Personal/index.md` for the live system.

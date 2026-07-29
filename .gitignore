@@ -65,3 +65,6 @@ Thumbs.db
 *.dwg
 *.zip
 *.mp4
+
+# Generated PR body — build artifact, never commit (has leaked a real email before)
+.hq-pr-body.md

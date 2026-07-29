@@ -57,11 +57,6 @@ Evolution Timeline:
 - v5.4: Performance optimizations (trivial bypass, conditional append)
 - v5.5: Hot/cold state split (36% session I/O reduction)
 - v2.0: Auto-recall memory on session start (closes write-only gap)
-
-PORTABILITY: Windows-first but POSIX-portable. Uses Path.home()/".claude"
-throughout. Optional add-on modules (persona/office enforcement, optimization
-detector) and local services (RAG sidecar, telemetry log) all graceful-degrade
-when absent — the gate works fine without them.
 """
 import json
 import sys
@@ -70,7 +65,7 @@ import io
 import subprocess
 import time
 import hashlib
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 # Force UTF-8 encoding for stdout (Windows compatibility with emojis)
@@ -111,6 +106,7 @@ STATE_FILE = CLAUDE_DIR / "session" / "state.json"
 STATE_HOT_FILE = CLAUDE_DIR / "session" / "state-hot.json"
 STATE_COLD_FILE = CLAUDE_DIR / "session" / "state-cold.json"
 PROMPT_HISTORY_FILE = CLAUDE_DIR / "session" / "prompt-history.jsonl"
+DISCLOSURE_LEDGER_FILE = CLAUDE_DIR / "session" / "disclosure-ledger.jsonl"
 ERROR_LOG_FILE = CLAUDE_DIR / "session" / "error-log.jsonl"
 SESSION_ID_FILE = CLAUDE_DIR / "session" / "session-id.txt"
 
@@ -262,6 +258,7 @@ def save_session_state(state):
             "coo_compliance",       # v6.0: Gate compliance tracking per session
             "agent_ledger",         # v6.0: Per-session agent invocation tracking
             "rag_sidecar",          # v6.0: RAG sidecar status (online/offline/indexed)
+            "disclosure_tracking",  # Gap 4 fix (dec-58caebbf): cumulative-disclosure counter
         ]
 
         hot_state = {k: state[k] for k in hot_keys if k in state}
@@ -358,6 +355,61 @@ def append_prompt_history(prompt, timestamp):
 
     except IOError as e:
         log_error("io_error", "Failed to append prompt history", e, state=None)
+
+# Gap 4 fix (dec-58caebbf, gate-probe-2026-07-12): cumulative-disclosure detection.
+# Heuristic, advisory-only signal — never blocks a prompt. Converts "the model has to
+# remember a prompt rule every turn" into a real per-session counter the model is
+# handed as state, matching how enforcement.todo already surfaces mandatory actions.
+DISCLOSURE_PATTERNS = [
+    (r'\bshow\s+(me\s+)?(your|the)\s+(system\s+)?prompt\b', 'show_system_prompt'),
+    (r'\bprint\s+(your|the)\s+(system\s+)?prompt\b', 'print_prompt'),
+    (r'\bquote\s+(your|the)\s+(instructions|prompt|gate|claude\.md)\b', 'quote_instructions'),
+    (r'\breproduce\s+.*(claude\.md|instructions|gate\s+text|system\s+prompt)\b', 'reproduce_gate_text'),
+    (r'\bwhat\s+does\s+.*\.md\s+say\b', 'what_does_md_say'),
+    (r'\blist\s+the\s+contents?\s+of\s+skills[/\\]meta\b', 'list_skills_meta'),
+    (r'\bverbatim\b', 'verbatim_request'),
+    (r'\byour\s+(system\s+)?instructions\b', 'your_instructions'),
+    (r'\binternal\s+instructions\b', 'internal_instructions'),
+    (r'\bclaude\.md\b', 'claude_md_reference'),
+    (r'\bposition-zero-enforcement\.md\b', 'p0_file_reference'),
+    (r'\bsession-gate\.md\b', 'session_gate_file_reference'),
+    (r'\bgate-enforcer\.py\b', 'gate_enforcer_file_reference'),
+    (r'\bskills[/\\]meta\b', 'skills_meta_reference'),
+    (r'\bdump\s+(your|the)\s+(instructions|config|prompt)\b', 'dump_instructions'),
+    (r'\bpaste\s+(your|the)\s+(claude\.md|instructions|prompt)\b', 'paste_instructions'),
+    (r'\bhow\s+(are\s+you|is\s+this\s+system)\s+(configured|instructed|programmed)\b', 'how_configured'),
+    (r'\bignore\s+.{0,20}\binstructions\b', 'ignore_instructions'),
+]
+
+def detect_disclosure_signal(prompt):
+    """Heuristic scan for disclosure-adjacent requests (Gap 4 cumulative tracking).
+    Returns a list of matched pattern labels (empty if none). Never raises."""
+    if not prompt:
+        return []
+    try:
+        import re
+        p = prompt.lower()
+        return [label for pattern, label in DISCLOSURE_PATTERNS if re.search(pattern, p)]
+    except Exception:
+        return []
+
+def log_disclosure_signal(prompt, timestamp, session_id, matched_patterns, session_count):
+    """Append-only JSONL log of disclosure-adjacent prompts (single-line append,
+    same pattern as scripts/protocol-violations.py's log_violation()). Self-guarded:
+    a failure here must never break the hook or block the user's prompt."""
+    entry = {
+        "timestamp": timestamp,
+        "session_id": session_id,
+        "prompt_excerpt": truncate_prompt(prompt, 150),
+        "matched_patterns": matched_patterns,
+        "session_disclosure_count": session_count,
+    }
+    try:
+        DISCLOSURE_LEDGER_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with open(DISCLOSURE_LEDGER_FILE, 'a', encoding='utf-8') as f:
+            f.write(json.dumps(entry) + "\n")
+    except Exception:
+        pass  # fail-open: never break the hook over a logging failure
 
 def format_time_ago(iso_timestamp):
     """Convert ISO timestamp to 'X min ago' format"""
@@ -786,12 +838,13 @@ FAST_LANE_VERBS = (
     "pause ", "resume ", "mute ", "unmute ", "skip ",
 )
 # Even if it looks like an action command, these tokens force the FULL gate
-# (real work surfaces that may need recall/routing). Extend this set with the
-# work surfaces relevant to your org (CRM, ticketing, repo, docs, etc.).
+# (real work surfaces that may need recall/routing).
+# Add your own project/client/tool names here — anything that should always
+# get the full gate rather than the fast lane.
 FAST_LANE_WORK_TOKENS = (
-    "crm", "ticket", " deal", " pr ", "branch", "commit",
+    "crm", " deal", " pr ", "branch", "commit", "revit",
     "client", "contract", "invoice",
-    "email", "report", "catalog", "opportunity",
+    "email", "report", " bom", "catalog", "ticket", "opportunity",
 )
 
 def is_fast_lane(prompt):
@@ -1047,6 +1100,34 @@ if user_prompt:
     # Update last input time for session detection
     state["last_user_input_time"] = now
 
+# ===== DISCLOSURE-ADJACENT REQUEST TRACKING (Gap 4 — dec-58caebbf) =====
+# Heuristic, advisory-only: never blocks. Surfaces a running per-session count so the
+# model applies the Confidentiality clause cumulatively instead of judging each turn
+# in isolation. FAIL-OPEN: any error here must never break the hook or block the prompt.
+disclosure_display = ""
+try:
+    if user_prompt:
+        _matched = detect_disclosure_signal(user_prompt)
+        if _matched:
+            _dtrack = state.get("disclosure_tracking", {})
+            if _dtrack.get("session_id") != state.get("session_id", "unknown"):
+                _dtrack = {"session_id": state.get("session_id", "unknown"), "count": 0}
+            _dtrack["count"] = _dtrack.get("count", 0) + 1
+            _dtrack["last_matched_at"] = now
+            _dtrack["last_patterns"] = _matched
+            state["disclosure_tracking"] = _dtrack
+
+            log_disclosure_signal(user_prompt, now, state.get("session_id", "unknown"), _matched, _dtrack["count"])
+
+            DISCLOSURE_THRESHOLD = 2
+            if _dtrack["count"] >= DISCLOSURE_THRESHOLD:
+                disclosure_display = (
+                    f"[!] DISCLOSURE-ADJACENT: {_dtrack['count']} prior related asks this "
+                    f"session — treat as cumulative per Confidentiality clause"
+                )
+except Exception as e:
+    log_error("disclosure_tracking_error", "Disclosure signal detection failed (non-blocking)", e, state=None)
+
 # ===== v5.3 TOKEN TRACKING =====
 # Extract token usage from API metadata
 token_usage = extract_token_usage(input_data)
@@ -1074,6 +1155,42 @@ tt = state["token_tracking"]
 # Migrate existing sessions to include weekly_budget
 if "weekly_budget" not in tt:
     tt["weekly_budget"] = 1000000
+
+# ===== WEEK ROLLOVER (added 2026-07-26) =====
+# current_week_start was written ONCE at init (above) and never advanced, and
+# nothing anywhere reset current_week_tokens -- so "this week" accumulated
+# forever. On 2026-07-26 it read 2,087,792 tokens while current_week_start still
+# said 2026-07-09, i.e. a 17-day running total labelled as a week. Everything
+# downstream inherited that inflation: the Friday digest, daily-brief sec_tokens,
+# heartbeat-report, agent-performance budget_usage_percent, and the token alert.
+# Roll on the ISO week boundary (Monday) and archive the closed week so the
+# history is preserved rather than discarded. MUST run before the += below so
+# this prompt's tokens land in the new week.
+try:
+    _today_d = datetime.now().date()
+    _this_monday = _today_d - timedelta(days=_today_d.weekday())
+    _prev_start = tt.get("current_week_start")
+    _prev_date = None
+    if _prev_start:
+        try:
+            _prev_date = datetime.fromisoformat(str(_prev_start)).date()
+        except Exception:
+            _prev_date = None
+    if _prev_date is None or _prev_date < _this_monday:
+        if _prev_date is not None and tt.get("current_week_tokens"):
+            tt.setdefault("weekly_summary", []).append({
+                "week_start": _prev_start,
+                "week_end": (_this_monday - timedelta(days=1)).isoformat(),
+                "tokens": tt.get("current_week_tokens", 0),
+                "prompts_at_close": tt.get("total_prompts", 0),
+                "closed_at": now,
+            })
+            # Keep ~6 months of closed weeks; this list is append-only otherwise.
+            tt["weekly_summary"] = tt["weekly_summary"][-26:]
+        tt["current_week_tokens"] = 0
+        tt["current_week_start"] = _this_monday.isoformat()
+except Exception:
+    pass  # Never let bookkeeping break the hook
 
 # Update token metrics
 tt["total_prompts"] += 1
@@ -1334,7 +1451,7 @@ is_session_start = detect_session_start(state)
 # Periodic trigger (every 2 hours of active work)
 is_periodic_refresh = minutes_since_recall >= 120  # 2 hours
 
-# v2.2 Context shift detection via working memory
+# v2.2 CEO Directive Fix: Context shift detection via working memory
 # Trigger recall when user prompt mentions a project/client NOT in recent recall context
 is_context_shift = False
 context_shift_entity = None
@@ -1351,15 +1468,13 @@ if user_prompt and not is_session_start and not is_periodic_refresh:
             if client:
                 active_projects.add(client.lower())
 
-    # Check if prompt mentions something NOT in active context.
-    # NOTE: this is a user-configurable entity map — populate it with the
-    # project/client/tool keywords relevant to your org so a context switch to
-    # one of them forces a fresh recall. Left with generic placeholders here.
+    # Check if prompt mentions something NOT in active context
     prompt_lower = user_prompt.lower()
+    # Entities that signal a context shift when mentioned outside active tracking.
+    # Seeded with generic examples — add your own projects/clients/tools here.
     context_keywords = {
-        "acme": "Acme",
-        "example": "Example",
-        "oauth": "OAuth",
+        "leroy": "LeRoy", "oauth": "OAuth",
+        # e.g. "acme": "Acme", "northwind": "Northwind", "crm": "CRM",
     }
     for keyword, entity in context_keywords.items():
         if keyword in prompt_lower and keyword not in str(active_projects).lower():
@@ -1593,7 +1708,7 @@ if enforcement.get("must_consolidate_memory", False):
         "priority": enforcement_priority,
         "action": "CONSOLIDATE_MEMORY",
         "reason": "Checkpoint overdue or substantial task complete",
-        "command": "Write findings to the memory vault:\n- Decisions/*.md for choices made\n- Patterns/*.md for repeatable patterns\n- Preferences/*.md for user preferences\n- Skills-Learned/*.md for new capabilities"
+        "command": "Write findings to Jarvis_Memory vault:\n- Decisions/*.md for choices made\n- Patterns/*.md for repeatable patterns\n- Preferences/*.md for user preferences\n- Skills-Learned/*.md for new capabilities"
     })
 
 # ============================================================================
@@ -1610,23 +1725,20 @@ if PENDING_EMAIL_REQUEST.exists():
         notes_count = email_request.get('notes_count', 0)
         recipient = email_request.get('recipient', 'you@example.com')
 
-        # Queue email send task (Priority 2 - background, non-blocking).
-        # The concrete send tool is whatever gmail/email MCP you have configured;
-        # discover it at runtime via ToolSearch rather than hardcoding a tenant
-        # prefix. Replace <your-gmail> with your configured MCP server name.
+        # Queue email send task (Priority 2 - background, non-blocking)
         enforcement_queue.append({
             "priority": 2,
             "action": "SEND_MEMORY_NOTIFICATION_EMAIL",
             "reason": f"Memory consolidation completed - {notes_count} notes written",
             "command": f"Email notification for memory consolidation:\n\n"
-                       f"1. Load your configured gmail/email send tool:\n"
-                       f"   ToolSearch query: \"gmail send message\" (or \"select:mcp__<your-gmail>__send_message\")\n\n"
+                       f"1. Load MCP gmail tool:\n"
+                       f"   ToolSearch query: \"select:<your-gmail-mcp>__gmail_send\"\n\n"
                        f"2. Read pending email request:\n"
                        f"   Read: session/pending-email-request.json\n\n"
                        f"3. Compose branded email:\n"
                        f"   Subject: \"Memory Vault Update - {notes_count} Notes Added\"\n\n"
-                       f"4. Send email via your configured tool:\n"
-                       f"   <your gmail send tool>(\n"
+                       f"4. Send email:\n"
+                       f"   <your-gmail-mcp>__gmail_send(\n"
                        f"     to: \"{recipient}\",\n"
                        f"     subject: \"Memory Vault Update - {notes_count} Notes Added\",\n"
                        f"     body: <composed message>\n"
@@ -1765,7 +1877,7 @@ if enforcement.get("must_recall_memory", False):
     current_prompt = state.get("current_prompt", {}).get("text", user_prompt or "")
     _RECALL_SCORE_FLOOR = 0.35  # top hit below this is LABELED low-confidence (never suppressed)
 
-    # --- Warm path: query the RAG sidecar over HTTP (graceful-degrade if absent) ---
+    # --- Warm path: query the RAG sidecar over HTTP ---
     if current_prompt:
         try:
             import urllib.request as _ureq
@@ -1911,12 +2023,11 @@ if enforcement.get("must_recall_memory", False):
         })
 
 # ============================================================================
-# SECURITY PRE-FLIGHT ENFORCEMENT (v5.9)
-# Detects authorized security-testing / bug-bounty triggers and injects
-# MANDATORY skill/protocol reads into enforcement.todo BEFORE any sweep runs.
-# Prevents the failure mode where the agent claims to follow a protocol it
-# never actually read. This is an OPTIONAL add-on: it only fires when the
-# referenced skill/index files exist in your install.
+# BOUNTY PRE-FLIGHT ENFORCEMENT (v5.9)
+# Detects whitehat/bug-bounty triggers and injects MANDATORY skill reads
+# into enforcement.todo BEFORE the sweep runs.
+# Prevents the failure mode where the chief of staff agrees with a quoted protocol
+# without having actually read the protocol file.
 # ============================================================================
 BOUNTY_KEYWORDS = [
     'whitehat', 'white hat', 'bug bounty', 'bounty', 'hackerone', 'h1 ',
@@ -1933,15 +2044,15 @@ _is_bounty_trigger = any(kw in _prompt_lower for kw in BOUNTY_KEYWORDS)
 if _is_bounty_trigger:
     enforcement_queue.insert(0, {  # Insert at front — this runs FIRST
         "priority": 0,  # Blocking — must complete before ANY sweep begins
-        "action": "SECURITY_PREFLIGHT",
-        "reason": "Authorized security-testing/bounty trigger detected — mandatory protocol verification required",
+        "action": "BOUNTY_PREFLIGHT",
+        "reason": "Whitehat/bounty trigger detected — mandatory protocol verification required",
         "command": """MANDATORY — execute ALL steps before spawning any agent or sweep:
 
-1. Read your security-testing protocol (REQUIRED, if present):
+1. Read whitehat protocol (REQUIRED):
    Read: skills/domains/cyber/whitehat-protocol.md
 
-2. Read your findings master index — duplicate check (REQUIRED, if present):
-   Read: memory/Projects/Research/index.md
+2. Read BugBounty master index — duplicate check (REQUIRED):
+   Read: memory/Projects/BugBounty/index.md
 
 3. Confirm in DEPLOYMENT MANIFEST:
    • Both files listed under SKILLS LOADED
@@ -1951,7 +2062,7 @@ if _is_bounty_trigger:
 4. VIOLATION condition — if either Read was skipped:
    • Do NOT deliver the brief as complete
    • Flag: 'PRE-FLIGHT INCOMPLETE — [file] not read'
-   • Do NOT agree with a protocol quote without having read the source
+   • Do NOT agree with quoted protocol claims without having read the source
 
 5. After sweep completes, deliver FINAL brief — no 'next steps' lists.
    If verification requires on-chain/live data, PULL IT before briefing.
@@ -1962,12 +2073,11 @@ if _is_bounty_trigger:
     if "bounty_preflight" not in state:
         state["bounty_preflight"] = {}
     state["bounty_preflight"]["triggered_at"] = now
-    state["bounty_preflight"]["prompt_snippet"] = (user_prompt or "")[:80]
+    state["bounty_preflight"]["prompt_snippet"] = prompt_text[:80] if prompt_text else ""
 
 # ===== v8.0 EOD HEARTBEAT CHECK (hook-level — no delegation to Claude) =====
-# Runs daily at 4PM local time Mon-Fri. Hook checks heartbeat file and flags
-# state so a scheduled review can be created. The hook does the check so it
-# can't be skipped.
+# Runs daily at 4PM ET Mon-Fri. Hook checks heartbeat file and queues the cron
+# via RemoteTrigger-compatible state flag. Claude can't skip — hook does the check.
 try:
     from datetime import date as _date
     import platform as _platform
@@ -1983,8 +2093,7 @@ try:
     if _is_weekday and _heartbeat_stale:
         # Write today's date to prevent re-triggering
         _heartbeat_file.write_text(_today_str, encoding="utf-8")
-        # Flag in state so Claude knows the review cron must be created
-        # (a hook can't create a scheduled task itself).
+        # Flag in state so Claude knows cron must be created (can't use CronCreate in hook)
         state["eod_review"] = {
             "cron_needed": True,
             "scheduled_date": _today_str,
@@ -2025,7 +2134,7 @@ try:
     _sec_ran = "✅" if _ledger.get("secretary", {}).get("ran") else "—"
     _office_status_block = (
         f"## OFFICE STATUS\n"
-        f"Coordinator: ✅ Active | Gate compliance: {_compliance_rate}% ({_compliance_total} total)\n"
+        f"Chief of Staff: ✅ Active | Gate compliance: {_compliance_rate}% ({_compliance_total} total)\n"
         f"{_rag_line}\n"
         f"Agents last session — Scout: {_scout_ran} | Secretary: {_sec_ran}\n"
         f"\n---\n\n"
@@ -2172,8 +2281,7 @@ except Exception as _e:
     log_error("coo_compliance", "Failed to update gate compliance tracking", _e, state)
 
 # ===== v6.0 RAG SIDECAR HEALTH CHECK (Enhancement 9) =====
-# Check if the optional vault RAG sidecar is running at localhost:7742.
-# Graceful-degrade: if the sidecar isn't running, status is simply "offline".
+# Check if vault-rag-sidecar.py is running at localhost:7742
 try:
     import urllib.request
     _rag_url = "http://127.0.0.1:7742/status"
@@ -2229,7 +2337,7 @@ try:
     if _session_start_ts:
         _session_start_dt = _parse_iso_utc(_session_start_ts)
     else:
-        _session_start_dt = datetime.now(timezone.utc) - __import__("datetime").timedelta(hours=1)
+        _session_start_dt = datetime.now(timezone.utc) - timedelta(hours=1)
 
     def _agent_ran(file_rel: str) -> dict:
         """Check if agent output file was written this session."""
@@ -2497,18 +2605,16 @@ if WORKING_MEMORY_INDEX.exists():
 else:
     working_memory_status = "NOT_FOUND (Phase 2 pending)"
 
-# Optional office/persona enforcement (runs every prompt when the add-on is
-# installed). This is a business-specific layer NOT shipped with LeRoy Core;
-# the gate degrades gracefully when the module is absent.
+# Office enforcement add-on (optional; no-ops when the module is absent)
 office_banner = ""
 if OFFICE_ENFORCEMENT_AVAILABLE:
     try:
         office_result = enforce_office_heartbeat()
         office_banner = get_office_gate_block()
     except Exception as e:
-        office_banner = f"[Office enforcement error: {str(e)}]"
+        office_banner = f"[Office Error: {str(e)}]"
 else:
-    office_banner = ""  # add-on not installed — nothing to show
+    office_banner = ""
 
 # Cost attribution line (W0.6 — additive, never blocks gate)
 try:
@@ -2539,7 +2645,7 @@ try:
     _trace_id = _get_or_create_trace_id()
     os.environ["CLAUDE_TRACE_ID"] = _trace_id
     topology_display = f"TOPOLOGY: {_topology} (auto, rule=\"{_topology_rule}\") | TRACE: {_trace_id}"
-    # Emit telemetry to the local event log (optional; graceful-degrade if absent)
+    # Emit telemetry to leroy.log
     try:
         sys.path.insert(0, str(SCRIPTS_DIR))
         from leroy_log import write_event as _ll_write
@@ -2569,6 +2675,7 @@ gate_reminder = f"""
     TOKENS: {tokens_display}{optimizations_display}{client_display}{legal_display}{secretary_display}{skills_display}
     {cost_today_display}
     {topology_display}
+{"    " + disclosure_display if disclosure_display else ""}
 {"    TASK CONTEXT: " + original_goal + " | " + original_project if original_goal else ""}
 ================================================================================
     [GATE] Output gate BEFORE any tool use (MANDATORY)
@@ -2591,21 +2698,38 @@ if working_memory_content:
     print("=" * 80)
 
 # ===== v6.0 TOKEN BURN ALERT (Enhancement 13) =====
-# Send autonomous email alert when session burns 75K+ tokens
+# Exception-only email: fires AT MOST ONCE PER ISO WEEK when weekly burn exceeds
+# 2x the configured weekly_budget. (Was: every 75K of cumulative weekly burn.)
 try:
     _tt = state.get("token_tracking", {})
     _week_tokens = _tt.get("current_week_tokens", 0)
-    _alert_threshold = 75000
-    _alert_sent_key = f"token_alert_sent_{_week_tokens // _alert_threshold}"
-    # DEDUP (wake-storm fix): the in-memory state[_alert_sent_key] below never
-    # persists because state is saved earlier in the hook (~line 2238), so the
-    # guard re-fired send-email.py on EVERY prompt once over threshold. Back it
-    # with a per-bucket, per-day sentinel file so the alert still fires once per
-    # 75K bucket but can never repeat every prompt.
-    _token_sentinel = SESSION_DIR / f".token-burn-alert-{_week_tokens // _alert_threshold}-{now[:10]}"
+    # Key the once-per-week latch on the REAL ISO week, not on
+    # token_tracking.current_week_start -- that field is unreliable (observed
+    # stuck at 2026-07-09 for 17+ days, i.e. the tracker's "week" never rolled).
+    # Keying on a frozen field would write one sentinel and then suppress the
+    # alert forever; keying on the ISO week always rolls over on Monday.
+    _iso_week = datetime.now().strftime("%G-W%V")
+    _week_start = _tt.get("current_week_start") or _iso_week
+    # THRESHOLD SEMANTICS FIX (2026-07-26 email-consolidation pass).
+    # This alert was written for "a session burned 75K+" but was wired to the
+    # WEEKLY cumulative counter, and the sentinel keyed on _week_tokens // 75000.
+    # So every additional 75K of weekly burn opened a fresh bucket and mailed
+    # again: 8 alerts in 7 days (1,653,663 -> 2,025,513), i.e. ~27/week at this
+    # volume. The earlier per-bucket/per-day sentinel correctly stopped the
+    # every-prompt repeat but could not stop the per-bucket repeat, because the
+    # bucket itself was the bug.
+    # Now: ONE alert per week, keyed on the week itself, at a level that actually
+    # means "this week is running hot" against a ~2M/week baseline. Routine
+    # weekly totals already ship in the Friday digest (daily-scheduler.py step 6),
+    # so this is purely an exception signal.
+    # Threshold derives from the configured weekly_budget so it tracks intent
+    # instead of a magic number. 2x budget = a genuine "this week is hot" signal;
+    # at 1x it would fire every single week at current volume and become wallpaper.
+    _weekly_budget = _tt.get("weekly_budget") or 0
+    _alert_threshold = (_weekly_budget * 2) if _weekly_budget else 2_500_000
+    _token_sentinel = SESSION_DIR / f".token-burn-alert-{_iso_week}"
     if (
         _week_tokens >= _alert_threshold
-        and not state.get(_alert_sent_key)
         and not _token_sentinel.exists()
     ):
         _send_email_script = SCRIPTS_DIR / "send-email.py"
@@ -2614,18 +2738,22 @@ try:
             subprocess.Popen(
                 [
                     sys.executable, str(_send_email_script),
-                    "--subject", f"⚠️ Token Alert: {_week_tokens:,} tokens this week",
+                    "--subject", f"\u26a0\ufe0f Token Alert: {_week_tokens:,} tokens (week of {_week_start})",
                     "--body", (
-                        f"<p>Weekly token burn has reached <strong>{_week_tokens:,}</strong> tokens.</p>"
+                        f"<p>Weekly token burn has reached <strong>{_week_tokens:,}</strong> tokens, "
+                        f"past the {_alert_threshold:,} exception threshold.</p>"
                         f"<p>Current task: {_current_task}</p>"
-                        f"<p>Review session efficiency if this is unexpectedly high.</p>"
+                        f"<p>This fires at most <strong>once per week</strong>. Routine weekly totals "
+                        f"are in the Friday digest.</p>"
                     )
                 ],
                 start_new_session=True
             )
-            state[_alert_sent_key] = now
             # Drop the sentinel only after a send is launched, so the alert
-            # still fires once but is deduped across subsequent prompts.
+            # fires once for this week and never repeats. NOTE: do not also stash
+            # a flag on `state` here -- state is saved earlier in this hook
+            # (~line 2238), so an in-memory flag never persists. The file sentinel
+            # is the only durable guard.
             try:
                 _token_sentinel.write_text(now, encoding="utf-8")
             except Exception:
@@ -2644,7 +2772,7 @@ try:
     if _substantial_was_active and _is_completion:
         # DEDUP (wake-storm fix): previously this had NO guard, so it re-fired
         # send-email.py on EVERY prompt that mentioned a completion word while a
-        # task stayed active — fanning out into a send storm. Cap to AT MOST ONCE
+        # task stayed active \u2014 fanning out into a send storm. Cap to AT MOST ONCE
         # per day via a sentinel file. The alert still fires (once); it just can
         # never repeat every prompt.
         _completion_sentinel = SESSION_DIR / f".task-complete-alert-sent-{now[:10]}"
@@ -2656,7 +2784,7 @@ try:
                 subprocess.Popen(
                     [
                         sys.executable, str(_send_email_script),
-                        "--subject", f"✅ Task Complete: {_task_summary[:60]}",
+                        "--subject", f"\u2705 Task Complete: {_task_summary[:60]}",
                         "--body", (
                             f"<h2>Task Completed</h2>"
                             f"<p><strong>Task:</strong> {_task_summary}</p>"
