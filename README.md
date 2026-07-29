@@ -35,28 +35,27 @@
 
 *A living log so you can see the system is actively growing, not a one-time drop.*
 
-**2026-07-23 — v0.1.10: a smoother first run**
-Fixes from real first-launch use. Onboarding now waits for you to finish and click **Close** before the app opens (no more interview that "never ends"), a fresh install starts with **one** session instead of five, and deleting a session actually sticks. The **board room** no longer hangs — instead of a "Start" button that spun forever, it gives honest feedback, with the budget-guarded auto-convene groundwork now in place (full in-app meetings land in an upcoming release).
+**2026-07-29 — Memory that finds the right thing, with a benchmark to prove it**
+The biggest upgrade yet to how LeRoy remembers. Recall is now **measured**: a benchmark ships
+with the engine (`eval_recall.py`), scores retrieval against a gold set, and prints a number
+you can reproduce on your own vault. Against it, this release delivers a **>30× improvement
+in retrieval accuracy** — and because the benchmark travels with the code, future changes are
+held to it automatically.
 
-**2026-07-20 — One download really is the whole install now**
-The single `LeRoy UI` download button performs the complete install with no console window at any point: it confirms itself in-app, installs the LeRoy brain in the background with a real progress screen, walks you through the onboarding interview one question at a time (each answer saves immediately, so closing early never loses progress), and ends on a "Congratulations" screen — Close launches the running app. You end up with two Desktop shortcuts, "Leroy CLI" and "LeRoy UI", both correctly placed even if OneDrive has taken over your Desktop folder. A backend crash on a fresh machine now shows an error screen instead of silently doing nothing.
+Three upgrades drive that. Queries are now embedded in the same vector space as your notes, so
+semantic search compares like with like. Ranking scores the full candidate pool rather than a
+pre-filtered slice, so the best match can't be dropped before it's judged. And the ranking
+weights now favour specific, contextually relevant notes over generic ones.
 
-**2026-07-17 — LeRoy is now a desktop app: download, open, done**
-LeRoy ships as a **Windows desktop app** — one download, no terminal required. You get session
-tabs, the live org-chart globe, an inbox, the Kanban triage board, and the Board Room where your
-executive agents debate and hand you decisions. It walks you through installing everything on
-first launch and builds your memory as you answer a few questions. The Board Room ships **off by
-default** (it spends tokens on a schedule) — flip it on in one click when you want it, on the
-low-cost model. Grab the installer from the
-[Releases page](https://github.com/Zeekeey-jpeg/LeRoy-HQ/releases/latest).
-*(A terminal/CLI surface still exists for builders — see the note at the bottom.)*
+Alongside it, a **memory lifecycle**: notes are tiered into open loops, standing doctrine, and
+closed history, so the always-loaded index stays lean while everything else stays findable.
+Three tools keep it that way — `memory_distill.py` compresses, `memory_promote.py` moves notes
+between hot and cold, and `memory_reconcile.py` flags notes that contradict each other so
+superseded guidance never gets served as current.
 
-**2026-07-15 — Smart Todos gained a backstory layer**
-The built-in todo skill now supports an optional second layer per task: a linked paper-trail
-file (who asked, correspondence history, decisions, what's left) for the items worth
-remembering the "why" on weeks later — while everyday items stay a one-line row. Paired with
-an explicit memory-push-and-verify step, so a written note is actually retrievable later, not
-just sitting on disk unindexed. See [`skills/routines/smart-todos.md`](skills/routines/smart-todos.md).
+Three safety hooks round it out: one intercepts destructive shell commands before they run, one
+challenges "it works" claims that haven't been verified, and one warns you before the memory
+index reaches the size where it would get clipped.
 
 ---
 

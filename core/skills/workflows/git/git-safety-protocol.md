@@ -5,6 +5,19 @@
 
 ---
 
+## Process-Level Enforcement (dec-2dd29317, live 2026-07-16)
+
+These prompt-level rules are now backed by `hooks/destructive-command-guard.py`,
+a PreToolUse hook on every Bash/PowerShell call — including background tasks and
+crons that never see this document. It hard-blocks deletes of filesystem roots /
+`.claude` / memory, and flag-gates `git push --force` (`--force-with-lease` is
+allowed), `git reset --hard`, `git clean -f`, `git branch -D`, and recursive
+deletes outside scratch roots. Deliberate override: single-use
+`session/dcg-approved.flag`. Kill switch (instant rollback):
+`session/dcg-disabled.flag`. Blocked attempts log: `session/dcg-blocked.jsonl`.
+
+---
+
 ## CRITICAL RULE
 
 NEVER execute git commit or git push without EXPLICIT user instruction.
@@ -42,7 +55,7 @@ NEVER execute git commit or git push without EXPLICIT user instruction.
 
 ## Repo Boundary Verification (MANDATORY before destructive ops)
 
-**Lesson from 2026-04-28 incident:** A failed `rm -rf` deleted `v5-source/.git` but left a locked `.vite/` folder behind. Subsequent `cd v5-source && git reset --hard origin/master` walked UP to find `.claude/.git` — and reset the **parent** `.claude` repo, wiping uncommitted edits to `cache/changelog.md`, `memory/your org_Business/Invoicing/invoice-counter.json`, and `sessions/30312.json`.
+**Lesson from 2026-04-28 incident:** A failed `rm -rf` deleted `v5-source/.git` but left a locked `.vite/` folder behind. Subsequent `cd v5-source && git reset --hard origin/master` walked UP to find `.claude/.git` — and reset the **parent** `.claude` repo, wiping uncommitted edits to `cache/changelog.md`, `memory/Business/Invoicing/invoice-counter.json`, and `sessions/30312.json`.
 
 ### Hard Rules
 
@@ -78,7 +91,7 @@ git -C "$TARGET" reset --hard origin/<branch>
 - After ANY failed `rm -rf` (any non-zero exit)
 - After ANY failed `mv` of a folder containing `.git`
 - After ANY `git clone` into a non-empty target
-- When operating on a folder beneath another git repo (nested layout — e.g., `memory/Projects/IntegratorOS/v5-source/` lives under `.claude/.git`)
+- When operating on a folder beneath another git repo (nested layout — e.g., `memory/Projects/YourApp/web-client/` lives under `.claude/.git`)
 - When the user mentions "clone fresh", "overwrite", "wipe and reset" — these are exactly the ops with highest blast radius
 
 ---
