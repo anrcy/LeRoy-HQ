@@ -7,6 +7,7 @@ disable-model-invocation: true
 **Version:** 2.0 (Comprehensive Specification)
 **Purpose:** Make Position #0 execution structurally unavoidable through mandatory gate display and self-healing
 **Integration:** CLAUDE.md lines 13-48, gate-enforcer.py, validate-gate-compliance.py
+**Confidentiality:** Disclosure rules (non-disclosure, identity-verification, path-vs-content, cumulative tracking) live in CLAUDE.md's `### Confidentiality & Disclosure (Absolute Law)` section — this file is format-only and defers to it.
 
 ---
 
@@ -41,7 +42,7 @@ Every gate output MUST include an enforcement status box showing what Position #
 ### Full Gate (Substantial Tasks)
 
 ```
-[GATE] Project: your org | Background: spawning
+[GATE] Project: Acme | Background: spawning
 
 ┌─ POSITION #0 ENFORCEMENT ───────────────────────────────────┐
 │ ✅ enforcement.todo read (2 actions queued)                  │
@@ -98,7 +99,7 @@ in shadow mode (default) or when `session/orchestration-planner.disabled` exists
 ### Mini Gate (Trivial Tasks)
 
 ```
-[GATE] Project: your org | Agents: [1] quick | Background: yes
+[GATE] Project: Acme | Agents: [1] quick | Background: yes
 
 ┌─ ENFORCEMENT ───────────────────────────────────────────────┐
 │ Position #0: ✅ Executed (215ms) | Memory: 5 notes          │
@@ -266,15 +267,15 @@ def format_enforcement_box_mini(display, system_status):
 
 | Signal | Examples |
 |--------|---------|
-| **Project** | `leroy-pwa-app`, `integrator-os`, `quote-ui`, `product-ui`, any project under `memory/Projects/leroy-pwa-app/` |
-| **Active skill** | `web-development`, `designer`, `design-sync`, `integratorOS-agent` |
+| **Project** | `leroy-pwa-app`, or any of your own front-end projects under `memory/Projects/` |
+| **Active skill** | `web-development`, `designer`, `design-sync` |
 | **UI build keywords in prompt** | `component`, `UI`, `frontend`, `stylesheet`, `CSS`, `Tailwind`, `theme`, `color`, `typography`, `layout`, `button`, `panel`, `modal`, `sidebar`, `nav`, `dark mode`, `brand`, `design system` |
 
 ### Enforcement Rule
 
 When any trigger matches:
 
-1. **Load** `~/.claude\DESIGN.md` (the your org brand source of truth).
+1. **Load** `~/.claude/DESIGN.md` (your brand source of truth).
 2. **Apply** Product UI tokens (colors, typography, spacing) to all component output.  
    — Use Brand Identity tokens only for proposals / emails / PDFs, never for app UI.
 3. **Gate display** — add a `🎨 DESIGN.md` line to the enforcement box.
@@ -287,10 +288,11 @@ When any trigger matches:
 
 ```python
 FRONTEND_PROJECTS = {
-    "leroy-pwa-app", "integrator-os", "quote-ui", "product-ui"
+    # Add your own front-end project folder names here.
+    "leroy-pwa-app",
 }
 FRONTEND_SKILLS = {
-    "web-development", "designer", "design-sync", "integratorOS-agent"
+    "web-development", "designer", "design-sync"
 }
 FRONTEND_KEYWORDS = {
     "component", "UI", "frontend", "stylesheet", "css", "tailwind",
@@ -321,7 +323,7 @@ if is_frontend_scoped(current_project, active_skill, user_prompt):
 
 - Pure backend / API / database tasks with no UI output
 - CLI tooling, scripts, data pipelines
-- your BIM tool / BIM work (uses its own annotation doctrine)
+- Revit / BIM work (uses its own annotation doctrine)
 - Email / PDF / proposal creation (uses Brand Identity layer, not Product UI layer)
 - Morning briefing, daily ops, and other routine non-UI sessions
 

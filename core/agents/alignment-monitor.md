@@ -41,6 +41,20 @@ and that no index files contain dead references to deleted files.
 3. **Routing Gap Analysis** - Ensure keyword coverage is adequate per skill
 4. **Archive Enforcement** - Flag test/stub files for archival
 5. **New Skill Validation** - When a skill is created, verify it gets indexed
+6. **Harness Bloat Scan** (added 2026-07-23) - Beyond "is it reachable?", ask "does it
+   earn its place?". Protocol: `skills/meta/minimalism-audit.md`. Four dimensions:
+   - **Never-loaded skills** — reachable but never actually loaded. Cross-reference
+     `scripts/skill-usage-tracker.py` output and `session/agent-last-used.json`;
+     flag anything unloaded for 90+ days.
+   - **Overlapping-content clusters** — two or more skills with substantially
+     duplicate triggers or content. These split routing so neither reliably wins.
+   - **Stale self-reported inventories** — a file claiming counts that no longer
+     match reality. Known case: `skills/meta/skill-shopping.md` claims "32 skills"
+     while `skills/meta/` alone holds ~95.
+   - **Superseded siblings** — `.bak`, `.broken`, `-v2`, `.py.bak-*` next to live files.
+
+   Report-only. Never delete; archive per the existing Archive Protocol. Findings that
+   represent deliberate deferrals go to `session/debt-ledger.jsonl`.
 
 ### Scan Protocol (v2 — cross-domain aware)
 
@@ -60,21 +74,22 @@ find skills -name "*.md" -not -name "index.md" -printf "%f\n" \
 comm -23 /tmp/all_lower.txt /tmp/referenced.txt
 ```
 
-### CROSS-DOMAIN REF RESOLUTION
+### CROSS-DOMAIN REF RESOLUTION (fixes 2026-05-05 false-positive bug)
 
-**Problem:** Index files in nested skill domains legitimately reference paths outside their own folder — e.g.:
-- `memory/Patterns/X.md` (cross-domain to the vault)
-- `memory/Projects/.../notes.md` (cross-domain to the vault)
+**Problem detected 2026-05-05:** Index files in `skills/domains/<domain-a>/` and `skills/domains/<domain-b>/` legitimately reference paths outside their own folder — e.g.:
+- `memory/Patterns/Cyber-*.md` (cross-domain to vault)
+- `memory/Projects/Cyber/...` (cross-domain to vault)
 - `routines/morning.md` (cross-domain to skills/routines/)
 - `meta/mcp-pagination.md` (cross-domain to skills/meta/)
+- `<Domain>-Bundle-Index.md` → `memory/Business/Operations/...`
 
-A naive basename-only existence check inside the SAME folder reports these as "broken" when they actually exist elsewhere, producing large numbers of false positives.
+A naive basename-only existence check inside the SAME folder reports these as "broken" when they actually exist elsewhere. Result: 41 false positives in cyber index alone.
 
 **Required behavior when verifying broken refs:**
 
 1. If a ref **contains a `/`** (path-style ref like `memory/Patterns/X.md` or `routines/morning.md`):
-   - Resolve from `~/.claude/` root first (e.g., `~/.claude/memory/Patterns/X.md`)
-   - If not found, resolve from `~/.claude/skills/` (e.g., `~/.claude/skills/routines/morning.md`)
+   - Resolve from `.claude/` root first (e.g., `.claude/memory/Patterns/X.md`)
+   - If not found, resolve from `.claude/skills/` (e.g., `.claude/skills/routines/morning.md`)
    - Mark broken ONLY if it doesn't exist at EITHER location
 
 2. If a ref is **basename-only** (`my-skill.md`):
@@ -82,22 +97,22 @@ A naive basename-only existence check inside the SAME folder reports these as "b
    - Mark broken ONLY if zero matches anywhere
 
 3. **Report classification:**
-   - **TRULY BROKEN** = file doesn't exist anywhere in `~/.claude/`
+   - **TRULY BROKEN** = file doesn't exist anywhere in `.claude/`
    - **CROSS-DOMAIN OK** = file exists outside the index's home folder (this is normal, do NOT flag)
 
 **Verification script (Bash, drop into the scan flow):**
 
 ```bash
-# For each candidate broken ref, check the full ~/.claude/ tree before flagging:
+# For each candidate broken ref, check the full .claude/ tree before flagging:
 verify_ref() {
   local ref="$1"
   # Path-style ref → check .claude root + skills/
   if [[ "$ref" == */* ]]; then
-    [[ -f "$HOME/.claude/$ref" ]] && return 0
-    [[ -f "$HOME/.claude/skills/$ref" ]] && return 0
+    [[ -f "~/.claude/$ref" ]] && return 0
+    [[ -f "~/.claude/skills/$ref" ]] && return 0
   fi
   # Basename ref → search whole tree
-  local hit=$(find "$HOME/.claude" -name "$(basename "$ref")" 2>/dev/null | head -1)
+  local hit=$(find "~/.claude" -name "$(basename "$ref")" 2>/dev/null | head -1)
   [[ -n "$hit" ]] && return 0
   return 1   # truly broken
 }
@@ -131,7 +146,7 @@ Action Required: Yes/No
 ### Integration Points
 
 - **Monday Cleanup** (`skills/routines/monday-cleanup.md`): Run alignment scan as
-  part of the multi-category cleanup
+  part of the 11-category cleanup
 - **Skill Creator** (`skills/meta/skill-creator.md`): After creating a skill,
   alignment-monitor verifies index entry exists
 - **Agent Creator** (`skills/meta/agent-creator.md`): After creating an agent,
@@ -177,7 +192,7 @@ Scan for A2A-specific alignment issues:
 
 **Report format:**
 ```
-A2A Card Alignment: N/N agents covered (100%)
+A2A Card Alignment: 13/13 agents covered (100%)
   Orphaned cards: 0
   Missing cards: 0
   Capability drift: 0
@@ -210,8 +225,7 @@ When orphans or dead references are found:
 3. Suggest keywords for new routing entries
 4. Flag archive candidates with reasoning
 5. Escalate to @conductor for execution
-
-### Reporting Chain
+n### Reporting Chain
 - **Direct report to:** CKO (weekly alignment metrics feed into knowledge governance)
 - **Escalate fixes to:** COO/Conductor (who delegates to builder for index edits)
 - **Coordinate with:** Janitor (Monday cleanup), Scout (pattern detection), Skill Creator (new skill validation)
@@ -220,12 +234,19 @@ When orphans or dead references are found:
 
 Verify the CLAUDE.md hot-list contains all required P0 routing entries. This prevents routing gaps from accumulating silently between manual audits.
 
+**Required P0 entries to verify are present in CLAUDE.md hot-list:**
+1. `"what's left"` or `"ready to ship"` → guardian + planner
+2. `"<tool> check"` or `"<tool> status"` → tech-lead (NOT professor)
+3. `"<tool> guide"` or `"teach <tool>"` → professor (NOT tech-lead)
+4. `"review PR"` or `"/code-review"` → guardian + code-review skill
+5. `"email to"` or `"follow-up email"` → reply-intelligence
+
 **Verification steps:**
 ```bash
-# Read CLAUDE.md hot-list section and check each configured P0 entry is present
+# Read CLAUDE.md hot-list section and check each P0 entry
 grep -i "ready to ship\|what's left\|can we ship" ~/.claude/CLAUDE.md
-grep -i "review PR\|code-review" ~/.claude/CLAUDE.md
-grep -i "email to\|follow-up email" ~/.claude/CLAUDE.md
+grep -i "<tool> check\|<tool> status\|<tool> health" ~/.claude/CLAUDE.md
+grep -i "<tool> guide\|teach <tool>" ~/.claude/CLAUDE.md
 ```
 
 **Skill-index rebuild script check:**
@@ -234,7 +255,7 @@ grep -i "email to\|follow-up email" ~/.claude/CLAUDE.md
 ls ~/.claude/scripts/build-skill-index.py 2>/dev/null || echo "MISSING: skill-index rebuild script not found"
 ```
 
-**Output:** Add "Hot-List Integrity: X/N P0 entries present" to the alignment report. If any missing → flag as [ROUTING GAP] with the specific entry to add. This surfaces in the Monday report which chief-of-staff reads.
+**Output:** Add "Hot-List Integrity: X/5 P0 entries present" to the alignment report. If any missing → flag as [ROUTING GAP] with specific entry to add. This surfaces in the Monday report which chief-of-staff reads.
 
 ---
 
@@ -312,4 +333,4 @@ A2A Protocol Alignment: N/N agents wired
   Orphaned cards: 0
 ```
 
-*Alignment implementation | A2A-enabled*
+*Created: 2026-02-15 | Alignment implementation Phase 7 | A2A-enabled | 2026-04-18*
