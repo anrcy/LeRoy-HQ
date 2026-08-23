@@ -35,6 +35,22 @@
 
 *A living log so you can see the system is actively growing, not a one-time drop.*
 
+**2026-08-23 — Re-running the installer now actually updates you**
+If you installed LeRoy early, you were quietly stuck. Re-running the installer only ever
+*added* files — everything we'd **fixed** was skipped and everything we'd **removed** stayed
+behind, so you collected new features while keeping old, already-fixed ones.
+
+That's fixed. LeRoy now records a fingerprint of every file it installs, which lets it tell a
+file **you** edited from one that's merely out of date. Untouched files get updated, retired
+ones get cleaned up, and **your edits are never overwritten** — the new version lands beside
+them as `.leroy-new` so you can merge on your own terms. `settings.json`, `SOUL.md`, `USER.md`
+and your memory vault are never touched. `--dry-run` shows the whole plan without writing
+anything.
+
+Two installer bugs went with it: running the installer twice in the same second used to crash
+outright, and a run that changed nothing still copied your entire config. Checking for updates
+is now free. → [UPGRADING.md](UPGRADING.md)
+
 **2026-07-29 — Memory that finds the right thing, with a benchmark to prove it**
 The biggest upgrade yet to how LeRoy remembers. Recall is now **measured**: a benchmark ships
 with the engine (`eval_recall.py`), scores retrieval against a gold set, and prints a number
@@ -110,8 +126,24 @@ the guardrails? Keep reading below.</i></p>
   <a href="https://github.com/Zeekeey-jpeg/LeRoy-HQ/releases/latest">Release notes ↗</a></sub>
 </p>
 
-The app **auto-updates itself** from Releases afterward, so you always have the latest LeRoy.
+The app **auto-updates itself** from Releases afterward, so the LeRoy UI stays current.
 *(Enjoying it? A ⭐ Star up top helps other people find it.)*
+
+### 🔄 Already have LeRoy? Updating
+
+The app updates itself, but the **brain** — the agents, skills and hooks in `~/.claude` —
+comes from this repo. To pull the latest of those, re-run the installer:
+
+```powershell
+irm https://raw.githubusercontent.com/Zeekeey-jpeg/LeRoy-HQ/main/install.ps1 | iex
+```
+
+It updates in place. Fixes land, retired files are cleaned up, and **anything you edited
+yourself is kept** — the new version is written beside it as `.leroy-new` for you to merge.
+Your memory vault and `settings.json` are never overwritten. Add `--dry-run` to preview.
+
+→ **[UPGRADING.md](UPGRADING.md)** — what gets touched, how to undo it, and the one
+special case for installs from before `v0.1.11`.
 
 ### ✅ Requirements
 
