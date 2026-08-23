@@ -93,21 +93,52 @@ MANIFEST_VERSION = 1
 # by the key-by-key merger below).
 PROTECTED = {"settings.json", "SOUL.md", "USER.md", "MEMORY.md"}
 
+# Files the overlay SHIPS but that Claude Code also treats as the user's own
+# surface. CLAUDE.md is the case that matters: the `#` quick-memory shortcut
+# appends to it, so a user's copy diverges through normal use without them ever
+# "editing a LeRoy file". These are never overwritten — but unlike PROTECTED,
+# the new version IS written beside them as .leroy-new, so improvements stay
+# visible instead of being silently withheld.
+USER_AUTHORED = {"CLAUDE.md"}
+
 # Recorded instead of a real hash when we leave a user-modified file in place.
 # Never equals a genuine digest, so the file stays flagged as theirs forever.
 USER_OWNED = "user-modified"
 
 
-def _sha256(path: Path) -> str:
-    h = hashlib.sha256()
-    with open(path, "rb") as fh:
-        for chunk in iter(lambda: fh.read(65536), b""):
-            h.update(chunk)
-    return h.hexdigest()
+def _sha256(path: Path) -> str | None:
+    """
+    Digest of a file, or None if it cannot be read (locked, unreadable, or not
+    a regular file). None means "unknown", never "unchanged" — callers must
+    treat it as the user's, because we cannot prove otherwise.
+    """
+    try:
+        h = hashlib.sha256()
+        with open(path, "rb") as fh:
+            for chunk in iter(lambda: fh.read(65536), b""):
+                h.update(chunk)
+        return h.hexdigest()
+    except OSError:
+        return None
 
 
 def manifest_path(dest: Path) -> Path:
     return dest / MANIFEST_NAME
+
+
+def _safe_key(key: str) -> bool:
+    """
+    A manifest key must be a RELATIVE path inside dest. The manifest is a plain
+    file on disk, so its keys are untrusted input; they reach `dest / key` and
+    then unlink(). `dest / "C:/Windows/..."` resolves to an ABSOLUTE path on
+    Windows, and ".." escapes upward — neither may ever reach a delete.
+    """
+    if not isinstance(key, str) or not key or key != key.strip():
+        return False
+    p = Path(key)
+    if p.is_absolute() or p.drive or p.anchor:
+        return False
+    return ".." not in p.parts
 
 
 def load_manifest(dest: Path) -> dict:
@@ -120,7 +151,9 @@ def load_manifest(dest: Path) -> dict:
     except (json.JSONDecodeError, OSError):
         return {}  # unreadable manifest is treated as "no baseline", never fatal
     files = data.get("files")
-    return files if isinstance(files, dict) else {}
+    if not isinstance(files, dict):
+        return {}
+    return {k: v for k, v in files.items() if _safe_key(k) and isinstance(v, str)}
 
 
 def write_manifest(dest: Path, files: dict) -> None:
@@ -130,8 +163,11 @@ def write_manifest(dest: Path, files: dict) -> None:
         "note": (
             "Hashes of the files LeRoy installed. This is how the installer tells "
             "YOUR edits apart from an out-of-date file, so re-running it can update "
-            "safely. Delete this only if you want the next update to treat every "
-            "file as yours and touch nothing."
+            "safely. KEEP THIS FILE. Deleting it does not protect anything - it "
+            "erases the record of what we installed, so the next update can no "
+            "longer recognise your edits and will refresh changed files (keeping "
+            "a .leroy-bak beside each). To review changes yourself instead, run "
+            "the installer with --keep-local."
         ),
         "files": dict(sorted(files.items())),
     }
@@ -245,6 +281,10 @@ class MergePlan:
         self.settings_merge: str | None = None  # human summary of settings action
         self.hooks_merge: str | None = None  # human summary of hook-wiring action
         self.had_manifest: bool = False   # False on the first upgrade of an old install
+        # Keys we have NO recorded baseline for. We cannot prove these are ours,
+        # so every one of them gets a per-file .leroy-bak if we do overwrite it.
+        self.no_baseline: set = set()
+        self.settings_write: bool = False  # settings.json will be rewritten
         self.keep_local: bool = False
         self.source_hashes: dict[str, str] = {}
         # (rel, reason) for files we could not write — read-only, locked by
@@ -262,6 +302,9 @@ class MergePlan:
         return (
             len(self.new_files) + len(self.readded) + len(self.updated)
             + len(self.conflicts) + len(self.removed)
+            # settings.json is rewritten outside the file loops; a run that only
+            # does that still MODIFIES the config and so still needs a backup.
+            + (1 if self.settings_write else 0)
         )
 
 
@@ -297,8 +340,10 @@ def build_plan(source: Path, dest: Path, keep_local: bool = False) -> MergePlan:
             continue
 
         key = rel.as_posix()
-        seen.add(key)
         src_hash = _sha256(path)
+        if src_hash is None:
+            continue  # cannot read our own overlay file; skip rather than crash
+        seen.add(key)
         plan.source_hashes[key] = src_hash
         target = dest / rel
 
@@ -320,13 +365,27 @@ def build_plan(source: Path, dest: Path, keep_local: bool = False) -> MergePlan:
             plan.unchanged.append(rel)
             continue
 
+        if key in USER_AUTHORED:
+            # Differs and is a user-owned surface -> never a blind overwrite.
+            plan.conflicts.append(rel)
+            continue
+
         base = manifest.get(key)
         if base is None:
-            # No baseline: an install from before manifests existed. We cannot
-            # prove the file is untouched, so this is the one judgement call.
-            # Default is to update (that IS the upgrade), with a per-file
-            # .leroy-bak plus the full backup as the undo. --keep-local flips it.
-            (plan.conflicts if keep_local else plan.updated).append(rel)
+            plan.no_baseline.add(key)
+            if plan.had_manifest:
+                # We have a manifest and this file ISN'T in it -> we never
+                # installed it. It is the user's own work that the overlay has
+                # only now started shipping. Never overwrite that.
+                plan.conflicts.append(rel)
+            else:
+                # No manifest at all: an install from before manifests existed.
+                # Everything here predates our record, so refreshing IS the
+                # upgrade — but every one gets a per-file .leroy-bak.
+                (plan.conflicts if keep_local else plan.updated).append(rel)
+        elif tgt_hash is None:
+            # Unreadable target: cannot prove it is ours, so treat it as theirs.
+            plan.conflicts.append(rel)
         elif tgt_hash == base:
             plan.updated.append(rel)     # exactly what we installed -> safe
         else:
@@ -334,14 +393,19 @@ def build_plan(source: Path, dest: Path, keep_local: bool = False) -> MergePlan:
 
     # Files we installed that the overlay no longer ships -> propagate removal,
     # but only when the user never touched them.
+    # Compare case-insensitively too: on Windows a case-only rename yields a NEW
+    # key plus an old key not in `seen`, and both resolve to the SAME file — so a
+    # naive check installs the file and then deletes it in the same run.
+    seen_ci = {k.lower() for k in seen}
     for key, base in manifest.items():
-        if key in seen or base == USER_OWNED:
+        if key in seen or key.lower() in seen_ci or base == USER_OWNED:
             continue
         target = dest / key
         if not target.exists():
             continue
         if key in PROTECTED:
             continue
+        # None (unreadable) must never satisfy this: unknown is not "ours".
         if _sha256(target) == base:
             plan.removed.append(Path(key))
         else:
@@ -370,6 +434,11 @@ def build_plan(source: Path, dest: Path, keep_local: bool = False) -> MergePlan:
             )
         except Exception:
             plan.hooks_merge = "hooks/settings.hooks.json present but unreadable - will skip (hooks stay inert)"
+
+    # settings.json is rewritten whenever the overlay carries settings or hook
+    # wiring. That is a real modification and must count toward plan.writes, or
+    # a "nothing to do" run would rewrite it with no backup taken.
+    plan.settings_write = (source / "settings.json").exists() or hooks_src.exists()
     return plan
 
 
@@ -418,7 +487,10 @@ def apply_plan(source: Path, dest: Path, plan: MergePlan, interpreter: str | Non
     #    so the undo is local as well as in the whole-tree backup.
     for rel in plan.updated:
         tgt = dest / rel
-        if not plan.had_manifest and tgt.exists():
+        # Back up per-file whenever we have no recorded baseline for it — the
+        # safety net must be present exactly when provenance is UNKNOWN, not
+        # gated on a global flag.
+        if rel.as_posix() in plan.no_baseline and tgt.exists():
             try:
                 shutil.copy2(tgt, tgt.with_name(tgt.name + ".leroy-bak"))
             except OSError:
@@ -488,6 +560,14 @@ def apply_plan(source: Path, dest: Path, plan: MergePlan, interpreter: str | Non
             new_manifest[key] = prior.get(key, USER_OWNED)
         else:
             new_manifest[key] = digest
+
+    # Retired files the user had EDITED must stay marked as theirs. They are
+    # absent from source_hashes (the overlay no longer ships them), so without
+    # this they drop out of the manifest entirely — and if the overlay ever
+    # ships that path again it would look like a file we had never installed.
+    for rel in plan.orphan_kept:
+        new_manifest.setdefault(rel.as_posix(), USER_OWNED)
+
     write_manifest(dest, new_manifest)
 
 
@@ -560,6 +640,12 @@ def print_plan(plan: MergePlan, source: Path, dest: Path, dry_run: bool, backup_
     if plan.hooks_merge:
         print(f"  {MERGE} hooks: {plan.hooks_merge}")
     print("  " + "-" * 60)
+    if dry_run:
+        print("  Dry run complete. Re-run without --dry-run to apply.\n")
+
+
+def print_outcome(plan: MergePlan) -> None:
+    """Printed AFTER apply_plan - only what is not knowable in advance."""
     if plan.failed:
         print()
         print(f"  {CONF} {len(plan.failed)} file(s) COULD NOT be written:")
@@ -572,12 +658,7 @@ def print_plan(plan: MergePlan, source: Path, dest: Path, dry_run: bool, backup_
         print("  so re-running the installer retries them once the cause is cleared")
         print("  (close the program holding them, or clear the read-only flag).")
         print("  " + "-" * 60)
-
-    if dry_run:
-        print("  Dry run complete. Re-run without --dry-run to apply.\n")
-    elif plan.failed:
-        print(f"  Merge finished with {len(plan.failed)} problem(s) - see above.")
-        print()
+        print(f"  Merge finished with {len(plan.failed)} problem(s) - see above.\n")
     else:
         print(f"  {OK}  Merge complete.\n")
 
@@ -635,9 +716,12 @@ def main(argv: list[str] | None = None) -> int:
     backup_dir = fresh_backup if args.fresh else backup(
         dest, dry_run=args.dry_run, needed=plan.writes > 0
     )
+    # Print the plan BEFORE touching anything, so the backup location and the
+    # --keep-local advice reach the user while they can still act on them.
+    print_plan(plan, source, dest, args.dry_run, backup_dir)
     if not args.dry_run:
         apply_plan(source, dest, plan, interpreter)
-    print_plan(plan, source, dest, args.dry_run, backup_dir)
+        print_outcome(plan)
     return 0
 
 

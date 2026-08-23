@@ -14,8 +14,8 @@ yourself are left alone.
 
 ## What actually happens to your files
 
-Every file is sorted into one of these, and the plan is printed before anything
-is written:
+Every file is sorted into one of these. The full plan — and the backup location
+— is printed **before** anything is written:
 
 | | What it means |
 |---|---|
@@ -25,6 +25,7 @@ is written:
 | **remove** | A file LeRoy no longer ships and you never touched. Deleted, so you don't accumulate dead agents and skills. |
 | **retired, but you edited it** | Dropped from LeRoy, but it's yours now. Left alone. |
 | **protected** | `settings.json`, `SOUL.md`, `USER.md`, `MEMORY.md`. Never overwritten, ever. |
+| **your surface** | `CLAUDE.md`. LeRoy ships it, but Claude Code's `#` shortcut writes to it too, so it's treated as yours: never overwritten, and the new version arrives as `.leroy-new`. |
 
 `settings.json` is never replaced — it's merged key by key. Your values always
 win, and LeRoy's hooks are appended to yours rather than replacing them.
@@ -40,8 +41,10 @@ what's actually on disk. A file that still matches its hash is one you never
 touched, so it's safe to update. A file that doesn't match is yours, and LeRoy
 won't overwrite it.
 
-Delete that manifest and the next upgrade will treat every file as yours and
-leave everything in place.
+**Keep that file.** Deleting it doesn't protect anything — it erases the record
+of what LeRoy installed, so the next upgrade can no longer recognise your edits
+and falls back to refreshing changed files (keeping a `.leroy-bak` beside each).
+If you want to review changes yourself instead, use `--keep-local` below.
 
 ---
 
