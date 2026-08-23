@@ -6,16 +6,23 @@ Safe, backup-first, ADDITIVE merge of the LeRoy overlay (`core/`) into the
 user's Claude Code config directory (`~/.claude`).
 
 Two ironclad rules:
-  1. NEVER overwrite the user's own settings. We back the whole `~/.claude`
-     tree up first, then only copy files that DON'T already exist. The one
-     exception is `settings.json`, which we MERGE key-by-key (and hooks are
-     appended, never replaced).
+  1. NEVER overwrite the user's own work. We back the whole `~/.claude` tree up
+     first, then use the overlay manifest (`.leroy-overlay.json`) to tell files
+     the user edited apart from files that are simply out of date: untouched
+     files are UPDATED, edited files are kept and the new version is written
+     beside them as `<name>.leroy-new`. `settings.json` is MERGED key-by-key
+     (hooks appended, never replaced) and is never overwritten.
   2. Everything is reversible. The backup lives at
      `~/.claude.backup-<YYYY-MM-DD-HHMMSS>/` and `leroy reset` restores it.
 
+Re-running the installer is therefore a real UPDATE, not just an add: fixes to
+existing files land, and files dropped from LeRoy are removed (only when the
+user never touched them).
+
 Usage:
-    python installer/merge.py                 # do the merge
+    python installer/merge.py                 # install or update
     python installer/merge.py --dry-run       # show what WOULD happen, touch nothing
+    python installer/merge.py --keep-local    # first upgrade: keep your versions
     python installer/merge.py --source PATH   # override the core/ source dir
     python installer/merge.py --dest PATH     # override ~/.claude (testing)
 
@@ -27,6 +34,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as _dt
+import hashlib
 import json
 import re
 import shutil
@@ -53,6 +61,9 @@ NEW = "＋" if _UTF_OK else "[new] "
 SKIP = "·" if _UTF_OK else "[skip]"
 MERGE = "≈" if _UTF_OK else "[merge]"
 OK = "✅" if _UTF_OK else "[ OK ]"
+UPD = "↑" if _UTF_OK else "[upd] "
+CONF = "!" if _UTF_OK else "[keep]"
+DEL = "−" if _UTF_OK else "[del] "
 
 
 def default_source() -> Path:
@@ -63,6 +74,70 @@ def default_source() -> Path:
 def default_dest() -> Path:
     """The live Claude Code config dir — always derived from HOME, never hardcoded."""
     return (Path.home() / ".claude").resolve()
+
+
+# --- the overlay manifest ---------------------------------------------------
+# WHY THIS EXISTS
+#     Before it, this merger was additive-only: `if target.exists(): skip`. That
+#     made re-running the installer useless for anyone who already had LeRoy —
+#     new files landed, but every FIXED file was skipped and every REMOVED file
+#     stayed, leaving mixed-version installs.
+#     The manifest records the hash of each file LeRoy installed, so on the next
+#     run we can tell "the user edited this" apart from "this is just old" — and
+#     update only what is genuinely untouched.
+MANIFEST_NAME = ".leroy-overlay.json"
+MANIFEST_VERSION = 1
+
+# Never updated or removed by an upgrade, whatever the manifest says. These are
+# the user's own identity/config surfaces (settings.json is handled separately
+# by the key-by-key merger below).
+PROTECTED = {"settings.json", "SOUL.md", "USER.md", "MEMORY.md"}
+
+# Recorded instead of a real hash when we leave a user-modified file in place.
+# Never equals a genuine digest, so the file stays flagged as theirs forever.
+USER_OWNED = "user-modified"
+
+
+def _sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def manifest_path(dest: Path) -> Path:
+    return dest / MANIFEST_NAME
+
+
+def load_manifest(dest: Path) -> dict:
+    """Return {relative-posix-path: hash}. Missing/corrupt manifest -> {}."""
+    p = manifest_path(dest)
+    if not p.exists():
+        return {}
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}  # unreadable manifest is treated as "no baseline", never fatal
+    files = data.get("files")
+    return files if isinstance(files, dict) else {}
+
+
+def write_manifest(dest: Path, files: dict) -> None:
+    payload = {
+        "version": MANIFEST_VERSION,
+        "updated": _dt.datetime.now().isoformat(timespec="seconds"),
+        "note": (
+            "Hashes of the files LeRoy installed. This is how the installer tells "
+            "YOUR edits apart from an out-of-date file, so re-running it can update "
+            "safely. Delete this only if you want the next update to treat every "
+            "file as yours and touch nothing."
+        ),
+        "files": dict(sorted(files.items())),
+    }
+    manifest_path(dest).write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
 
 
 # --- settings.json merge ----------------------------------------------------
@@ -159,16 +234,47 @@ def _count_hook_entries(hooks_dict: dict) -> int:
 # --- the merge engine -------------------------------------------------------
 class MergePlan:
     def __init__(self) -> None:
-        self.new_files: list[Path] = []      # relative paths to be copied
-        self.skipped: list[Path] = []        # already exist, left untouched
+        self.new_files: list[Path] = []   # not on disk, never installed -> copy
+        self.readded: list[Path] = []     # we installed it, user deleted it -> restore
+        self.updated: list[Path] = []     # ours, untouched by user, newer -> overwrite
+        self.conflicts: list[Path] = []   # user edited it -> keep theirs, drop .leroy-new
+        self.unchanged: list[Path] = []   # already byte-identical -> no-op
+        self.kept: list[Path] = []        # PROTECTED -> never touched
+        self.removed: list[Path] = []     # dropped from overlay, untouched -> delete
+        self.orphan_kept: list[Path] = []  # dropped from overlay but user edited -> keep
         self.settings_merge: str | None = None  # human summary of settings action
         self.hooks_merge: str | None = None  # human summary of hook-wiring action
+        self.had_manifest: bool = False   # False on the first upgrade of an old install
+        self.keep_local: bool = False
+        self.source_hashes: dict[str, str] = {}
+
+    @property
+    def skipped(self) -> list[Path]:
+        """Back-compat: everything deliberately left as-is."""
+        return self.unchanged + self.conflicts + self.kept + self.orphan_kept
+
+    @property
+    def writes(self) -> int:
+        return (
+            len(self.new_files) + len(self.readded) + len(self.updated)
+            + len(self.conflicts) + len(self.removed)
+        )
 
 
-def build_plan(source: Path, dest: Path) -> MergePlan:
+def build_plan(source: Path, dest: Path, keep_local: bool = False) -> MergePlan:
+    """
+    Classify every overlay file against what's on disk AND against the manifest
+    of what we installed last time. Three-way, so a fix can land without ever
+    clobbering something the user wrote.
+    """
     plan = MergePlan()
     if not source.exists():
         raise FileNotFoundError(f"source overlay not found: {source}")
+
+    manifest = load_manifest(dest)
+    plan.had_manifest = bool(manifest)
+    plan.keep_local = keep_local
+    seen: set[str] = set()
 
     for path in sorted(source.rglob("*")):
         if path.is_dir():
@@ -180,11 +286,62 @@ def build_plan(source: Path, dest: Path) -> MergePlan:
         # settings.json is handled by the merger, not the copier.
         if rel.name == "settings.json" and rel.parent == Path("."):
             continue
+        # Defensive: the manifest lives in dest and must never be shipped IN the
+        # overlay. If one ever were, copying it would clobber the real record of
+        # what the user has — and the next run would misjudge every file.
+        if rel.name == MANIFEST_NAME:
+            continue
+
+        key = rel.as_posix()
+        seen.add(key)
+        src_hash = _sha256(path)
+        plan.source_hashes[key] = src_hash
         target = dest / rel
-        if target.exists():
-            plan.skipped.append(rel)
+
+        if not target.exists():
+            # Restore anything we own; a file the user deleted comes back on
+            # update (a broken overlay is worse than an unwanted file).
+            (plan.readded if key in manifest else plan.new_files).append(rel)
+            continue
+
+        # PROTECTED holds root-level names, and `key` is the relative posix
+        # path, so this matches exactly ~/.claude/SOUL.md and never a nested
+        # file that happens to share the name.
+        if key in PROTECTED:
+            plan.kept.append(rel)
+            continue
+
+        tgt_hash = _sha256(target)
+        if tgt_hash == src_hash:
+            plan.unchanged.append(rel)
+            continue
+
+        base = manifest.get(key)
+        if base is None:
+            # No baseline: an install from before manifests existed. We cannot
+            # prove the file is untouched, so this is the one judgement call.
+            # Default is to update (that IS the upgrade), with a per-file
+            # .leroy-bak plus the full backup as the undo. --keep-local flips it.
+            (plan.conflicts if keep_local else plan.updated).append(rel)
+        elif tgt_hash == base:
+            plan.updated.append(rel)     # exactly what we installed -> safe
         else:
-            plan.new_files.append(rel)
+            plan.conflicts.append(rel)   # user changed it -> theirs wins
+
+    # Files we installed that the overlay no longer ships -> propagate removal,
+    # but only when the user never touched them.
+    for key, base in manifest.items():
+        if key in seen or base == USER_OWNED:
+            continue
+        target = dest / key
+        if not target.exists():
+            continue
+        if key in PROTECTED:
+            continue
+        if _sha256(target) == base:
+            plan.removed.append(Path(key))
+        else:
+            plan.orphan_kept.append(Path(key))
 
     # Plan the settings.json action.
     src_settings = source / "settings.json"
@@ -212,12 +369,27 @@ def build_plan(source: Path, dest: Path) -> MergePlan:
     return plan
 
 
-def backup(dest: Path, dry_run: bool) -> Path | None:
-    """Back up the entire existing ~/.claude before touching it."""
+def backup(dest: Path, dry_run: bool, needed: bool = True) -> Path | None:
+    """
+    Back up the entire existing ~/.claude before touching it.
+
+    `needed` is False when the plan writes nothing: now that re-running the
+    installer is the normal way to UPDATE, a no-op run would otherwise copy the
+    whole config tree every time and pile up identical backups.
+    """
     if not dest.exists():
         return None  # nothing to back up (fresh install)
+    if not needed:
+        return None  # nothing will be written, so there is nothing to undo
     stamp = _dt.datetime.now().strftime("%Y-%m-%d-%H%M%S")
     backup_dir = dest.parent / f"{dest.name}.backup-{stamp}"
+    # The stamp only resolves to the second, so two runs inside the same second
+    # collided and crashed on FileExistsError. Rare when installing once; not
+    # rare at all once updating is routine.
+    suffix = 2
+    while backup_dir.exists():
+        backup_dir = dest.parent / f"{dest.name}.backup-{stamp}-{suffix}"
+        suffix += 1
     if dry_run:
         return backup_dir
     shutil.copytree(dest, backup_dir, dirs_exist_ok=False)
@@ -227,11 +399,39 @@ def backup(dest: Path, dry_run: bool) -> Path | None:
 def apply_plan(source: Path, dest: Path, plan: MergePlan, interpreter: str | None) -> None:
     """Execute the merge for real (caller must have backed up first)."""
     dest.mkdir(parents=True, exist_ok=True)
-    for rel in plan.new_files:
+
+    # 1. files we've never placed, plus ones we own that went missing
+    for rel in list(plan.new_files) + list(plan.readded):
         src = source / rel
         tgt = dest / rel
         tgt.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src, tgt)
+
+    # 2. THE UPDATE: overwrite files that are ours and untouched. On the first
+    #    upgrade of a pre-manifest install we also drop a per-file .leroy-bak,
+    #    so the undo is local as well as in the whole-tree backup.
+    for rel in plan.updated:
+        tgt = dest / rel
+        if not plan.had_manifest and tgt.exists():
+            try:
+                shutil.copy2(tgt, tgt.with_name(tgt.name + ".leroy-bak"))
+            except OSError:
+                pass  # a backup we couldn't write must never block the update
+        tgt.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source / rel, tgt)
+
+    # 3. user-modified: never overwrite. Park the new version alongside.
+    for rel in plan.conflicts:
+        side = (dest / rel).with_name((dest / rel).name + ".leroy-new")
+        side.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source / rel, side)
+
+    # 4. propagate removals (only files proven untouched in build_plan)
+    for rel in plan.removed:
+        try:
+            (dest / rel).unlink()
+        except OSError:
+            pass
 
     # settings.json - start from the user's existing settings (or empty), then
     # apply the root overlay (if any) and the hook wiring. Written once at the
@@ -259,6 +459,19 @@ def apply_plan(source: Path, dest: Path, plan: MergePlan, interpreter: str | Non
             encoding="utf-8",
         )
 
+    # Record what we now own. Files we deliberately did NOT install (conflicts,
+    # PROTECTED) keep their old baseline — or are marked USER_OWNED — so they
+    # stay the user's on every future run.
+    prior = load_manifest(dest)
+    hands_off = {r.as_posix() for r in plan.conflicts} | {r.as_posix() for r in plan.kept}
+    new_manifest: dict[str, str] = {}
+    for key, digest in plan.source_hashes.items():
+        if key in hands_off:
+            new_manifest[key] = prior.get(key, USER_OWNED)
+        else:
+            new_manifest[key] = digest
+    write_manifest(dest, new_manifest)
+
 
 def _load_json(path: Path) -> dict:
     try:
@@ -282,18 +495,36 @@ def print_plan(plan: MergePlan, source: Path, dest: Path, dry_run: bool, backup_
     else:
         print(f"  (fresh install — no existing {dest.name} to back up)")
     print()
-    print(f"  {NEW} {len(plan.new_files)} new file(s) to add:")
-    for rel in plan.new_files[:40]:
-        print(f"      {NEW} {rel.as_posix()}")
-    if len(plan.new_files) > 40:
-        print(f"      ... and {len(plan.new_files) - 40} more")
-    print()
-    print(f"  {SKIP} {len(plan.skipped)} file(s) already present (left untouched):")
-    for rel in plan.skipped[:15]:
-        print(f"      {SKIP} {rel.as_posix()}")
-    if len(plan.skipped) > 15:
-        print(f"      ... and {len(plan.skipped) - 15} more")
-    print()
+    def _bucket(mark: str, items: list, caption: str, limit: int = 20) -> None:
+        if not items:
+            return
+        print(f"  {mark} {len(items)} {caption}")
+        for rel in items[:limit]:
+            print(f"      {mark} {rel.as_posix()}")
+        if len(items) > limit:
+            print(f"      ... and {len(items) - limit} more")
+        print()
+
+    if not plan.had_manifest and (plan.updated or plan.conflicts):
+        print("  (first update of an existing install: no record of what we")
+        print("   installed before, so changed files are refreshed and the old")
+        print("   copy is kept beside each as <name>.leroy-bak.")
+        print("   Prefer to keep your versions? re-run with --keep-local.)")
+        print()
+
+    _bucket(NEW, plan.new_files, "new file(s) to add:", 40)
+    _bucket(NEW, plan.readded, "file(s) to restore (installed by LeRoy, now missing):")
+    _bucket(UPD, plan.updated, "file(s) to UPDATE (unchanged by you since install):", 40)
+    _bucket(CONF, plan.conflicts, "file(s) YOU changed - kept as-is, new version written beside as .leroy-new:")
+    _bucket(DEL, plan.removed, "file(s) to remove (no longer part of LeRoy):")
+    _bucket(SKIP, plan.orphan_kept, "retired file(s) you had edited - left alone:")
+    _bucket(SKIP, plan.kept, "protected file(s) - never touched:")
+    if plan.unchanged:
+        print(f"  {SKIP} {len(plan.unchanged)} file(s) already up to date.")
+        print()
+    if plan.writes == 0:
+        print("  Nothing to do - this install is already current.")
+        print()
     if plan.settings_merge:
         print(f"  {MERGE} settings.json: {plan.settings_merge}")
     else:
@@ -310,6 +541,14 @@ def print_plan(plan: MergePlan, source: Path, dest: Path, dry_run: bool, backup_
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Safe additive merge of LeRoy core/ into ~/.claude")
     parser.add_argument("--dry-run", action="store_true", help="show the plan, write nothing")
+    parser.add_argument(
+        "--keep-local",
+        action="store_true",
+        help="on the first update of a pre-manifest install, do NOT refresh files "
+        "that differ from the shipped version - keep yours and write the new one "
+        "beside it as <name>.leroy-new. Later runs never need this: once a manifest "
+        "exists, your edits are detected precisely and always preserved.",
+    )
     parser.add_argument("--source", type=Path, default=None, help="override the core/ source dir")
     parser.add_argument("--dest", type=Path, default=None, help="override the ~/.claude target dir")
     parser.add_argument(
@@ -338,7 +577,7 @@ def main(argv: list[str] | None = None) -> int:
             dest.rename(fresh_backup)  # move, not copy — original preserved as the backup
 
     try:
-        plan = build_plan(source, dest)
+        plan = build_plan(source, dest, keep_local=args.keep_local)
     except FileNotFoundError as e:
         print(f"\n  merge aborted: {e}\n")
         return 1
@@ -349,7 +588,9 @@ def main(argv: list[str] | None = None) -> int:
 
     # In --fresh mode the move-aside above already produced the backup; otherwise
     # take the usual copy-based backup of the existing config before merging.
-    backup_dir = fresh_backup if args.fresh else backup(dest, dry_run=args.dry_run)
+    backup_dir = fresh_backup if args.fresh else backup(
+        dest, dry_run=args.dry_run, needed=plan.writes > 0
+    )
     if not args.dry_run:
         apply_plan(source, dest, plan, interpreter)
     print_plan(plan, source, dest, args.dry_run, backup_dir)

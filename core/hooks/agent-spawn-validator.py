@@ -16,7 +16,7 @@ import sys
 import io
 import re
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 from urllib.parse import urlparse
 
@@ -40,20 +40,66 @@ ALLOWED_FS_ZONES = [
 ]
 
 # Governance rule map — keyed by agent filename (without .md)
+#
+# Coverage: all 37 spawnable agents. Previously only 10 were listed, so the other
+# 27 silently defaulted to `tier = 4` at handle_task():270 and were never checked.
+#
+# Enforcement is SOFT — handle_task() always returns {"decision": "allow"} and only
+# attaches a warning. Entries here therefore affect reporting and warnings, never
+# execution.
+#
+# KNOWN DOCTRINE CONFLICT (surfaced, not silently encoded):
+#   * org-governance.md:65-138 declares Tier 5 "read-only", but scout and planner
+#     legitimately write session/growth-output.md and session/planner-output.md.
+#     Encoding read-only literally would fire a false violation on every scout
+#     spawn, so Tier 5 forbids only NotebookEdit here. Resolve the doctrine, then
+#     tighten this.
+#   * legal is Tier 1 in this map (pre-existing) and in conductor.md:18, but Tier 4
+#     Specialist in org-governance.md:119. Left at Tier 1 to preserve behaviour.
+#   * auditor is the documented read-only exception at org-governance.md (Tier 4).
 GOVERNANCE = {
     # Tier 1 C-Suite: NO Edit/Write/NotebookEdit
-    "conductor":      {"tier": 1, "forbidden": ["Edit", "Write", "NotebookEdit"]},
-    "cto":            {"tier": 1, "forbidden": ["Edit", "Write", "NotebookEdit"]},
-    "cfo":            {"tier": 1, "forbidden": ["Edit", "Write", "NotebookEdit"]},
-    "cko":            {"tier": 1, "forbidden": ["Edit", "Write", "NotebookEdit"]},
-    "legal":          {"tier": 1, "forbidden": ["Edit", "Write", "NotebookEdit"]},
+    "conductor":         {"tier": 1, "forbidden": ["Edit", "Write", "NotebookEdit"]},
+    "cto":               {"tier": 1, "forbidden": ["Edit", "Write", "NotebookEdit"]},
+    "cfo":               {"tier": 1, "forbidden": ["Edit", "Write", "NotebookEdit"]},
+    "cko":               {"tier": 1, "forbidden": ["Edit", "Write", "NotebookEdit"]},
+    "legal":             {"tier": 1, "forbidden": ["Edit", "Write", "NotebookEdit"]},
     # Tier 2 VP: NO Edit/Write/NotebookEdit
-    "vp-engineering": {"tier": 2, "forbidden": ["Edit", "Write", "NotebookEdit"]},
+    "vp-engineering":    {"tier": 2, "forbidden": ["Edit", "Write", "NotebookEdit"]},
     # Tier 3 Management: NotebookEdit forbidden only
-    "chief-of-staff": {"tier": 3, "forbidden": ["NotebookEdit"]},
-    "secretary":      {"tier": 3, "forbidden": ["NotebookEdit"]},
-    "scrum-leader":   {"tier": 3, "forbidden": ["NotebookEdit"]},
-    "hr":             {"tier": 3, "forbidden": ["NotebookEdit"]},
+    "chief-of-staff":    {"tier": 3, "forbidden": ["NotebookEdit"]},
+    "secretary":         {"tier": 3, "forbidden": ["NotebookEdit"]},
+    "scrum-leader":      {"tier": 3, "forbidden": ["NotebookEdit"]},
+    "hr":                {"tier": 3, "forbidden": ["NotebookEdit"]},
+    "tech-lead":         {"tier": 3, "forbidden": ["NotebookEdit"]},
+    # Tier 4 Specialists: full write access (auditor is the read-only exception)
+    "builder":           {"tier": 4, "forbidden": []},
+    "designer":          {"tier": 4, "forbidden": []},
+    "forge":             {"tier": 4, "forbidden": []},
+    "professor":         {"tier": 4, "forbidden": []},
+    "guardian":          {"tier": 4, "forbidden": []},
+    "janitor":           {"tier": 4, "forbidden": []},
+    "proposal-writer":   {"tier": 4, "forbidden": []},
+    "cyber-operator":    {"tier": 4, "forbidden": []},
+    "integratorOS-agent":{"tier": 4, "forbidden": []},
+    "goal-overseer":     {"tier": 4, "forbidden": []},
+    "etsy-overseer":     {"tier": 4, "forbidden": []},
+    "etsy-rd":           {"tier": 4, "forbidden": []},
+    "etsy-manager":      {"tier": 4, "forbidden": []},
+    "etsy-designer":     {"tier": 4, "forbidden": []},
+    "auditor":           {"tier": 4, "forbidden": ["Edit", "Write", "NotebookEdit"]},
+    # Tier 5 Support: advisory/read-mostly (see doctrine conflict note above)
+    "scout":             {"tier": 5, "forbidden": ["NotebookEdit"]},
+    "planner":           {"tier": 5, "forbidden": ["NotebookEdit"]},
+    "analyst":           {"tier": 5, "forbidden": ["NotebookEdit"]},
+    "quick":             {"tier": 5, "forbidden": ["NotebookEdit"]},
+    "scraper":           {"tier": 5, "forbidden": ["NotebookEdit"]},
+    "alignment-monitor": {"tier": 5, "forbidden": ["NotebookEdit"]},
+    "recon-agent":       {"tier": 5, "forbidden": ["NotebookEdit"]},
+    "ai-sec-agent":      {"tier": 5, "forbidden": ["NotebookEdit"]},
+    "simulator":         {"tier": 5, "forbidden": ["NotebookEdit"]},
+    "skill-matcher":     {"tier": 5, "forbidden": ["NotebookEdit"]},
+    "mesh-wrapper":      {"tier": 5, "forbidden": ["NotebookEdit"]},
 }
 
 
@@ -200,7 +246,12 @@ def log_spawn_event(agent: str, tier: int, tools: list,
     try:
         SESSION_DIR.mkdir(parents=True, exist_ok=True)
         entry = {
-            "timestamp": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S"),
+            # Timezone-AWARE UTC. datetime.utcnow() produced a NAIVE UTC string
+            # while agent-spawn-logger.py writes aware UTC and gate-enforcer
+            # compares against naive LOCAL — three conventions in one log, which
+            # skewed dispatch-rate comparisons by the UTC offset. Also silences
+            # the utcnow() DeprecationWarning.
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "agent": agent,
             "tier": tier,
             "tools": tools,
@@ -220,7 +271,12 @@ def log_network_event(tool: str, url: str, domain: str,
     try:
         SESSION_DIR.mkdir(parents=True, exist_ok=True)
         entry = {
-            "timestamp": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S"),
+            # Timezone-AWARE UTC. datetime.utcnow() produced a NAIVE UTC string
+            # while agent-spawn-logger.py writes aware UTC and gate-enforcer
+            # compares against naive LOCAL — three conventions in one log, which
+            # skewed dispatch-rate comparisons by the UTC offset. Also silences
+            # the utcnow() DeprecationWarning.
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "tool": tool,
             "url": url[:200],
             "domain": domain,
@@ -239,7 +295,12 @@ def log_fs_event(tool: str, path: str, zone_ok: bool,
     try:
         SESSION_DIR.mkdir(parents=True, exist_ok=True)
         entry = {
-            "timestamp": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S"),
+            # Timezone-AWARE UTC. datetime.utcnow() produced a NAIVE UTC string
+            # while agent-spawn-logger.py writes aware UTC and gate-enforcer
+            # compares against naive LOCAL — three conventions in one log, which
+            # skewed dispatch-rate comparisons by the UTC offset. Also silences
+            # the utcnow() DeprecationWarning.
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "tool": tool,
             "path": path[:300],
             "zone_ok": zone_ok,
@@ -385,7 +446,10 @@ def main():
     tool_name = hook_data.get("tool_name", "")
     tool_input = hook_data.get("tool_input", {})
 
-    if tool_name == "Task":
+    # The spawn tool is named "Agent" in current Claude Code and "Task" in older
+    # builds. settings.json matches "Task|Agent"; accepting only "Task" meant
+    # tier governance silently never ran on any modern spawn.
+    if tool_name in ("Task", "Agent"):
         handle_task(tool_input)
     elif tool_name == "WebFetch":
         handle_webfetch(tool_input)

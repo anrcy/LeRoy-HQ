@@ -173,6 +173,17 @@
           }
         ]
       }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"~/.claude/hooks/agent-return-validator.py\"",
+            "timeout": 10
+          }
+        ]
+      }
     ]
   }
 }
