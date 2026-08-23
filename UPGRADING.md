@@ -58,11 +58,10 @@ Writes nothing. Prints exactly what would be added, updated, kept, and removed.
 
 ## The first upgrade is the one special case
 
-If you installed LeRoy **before** this release, there's no manifest yet, so
-LeRoy can't prove whether a changed file is your edit or just an old version.
-Rather than skip the update (which is what left people stranded on old
-versions), it refreshes those files and keeps the previous copy beside each one
-as `<name>.leroy-bak`.
+Installs made before this release predate the fingerprint record, so for those
+LeRoy has no baseline to compare a changed file against. It refreshes them and
+keeps the previous copy beside each one as `<name>.leroy-bak`, so nothing is
+lost either way.
 
 If you'd rather keep your versions and review the new ones yourself:
 
@@ -103,14 +102,14 @@ Get-ChildItem ~/.claude -Recurse -Include *.leroy-new,*.leroy-bak | Remove-Item
 
 ---
 
-## If something goes wrong
+## Troubleshooting
 
 **"git pull failed (local changes in the way?)"** — you've edited files inside
 the LeRoy *checkout* itself (not `~/.claude`). Stash or discard them there, or
 delete the checkout and re-run; your `~/.claude` is separate and unaffected.
 
-**An update overwrote something you wanted** — it's in
-`~/.claude.backup-<timestamp>/`, and if it was the first upgrade, also in the
+**Want a file back the way you had it** — it's in
+`~/.claude.backup-<timestamp>/`, and if it was your first upgrade, also in the
 `.leroy-bak` beside it.
 
 **You want to start completely clean** — `python installer/merge.py --fresh`
