@@ -1,5 +1,71 @@
 # LeRoy UI — Changelog
 
+## v0.1.11 — 2026-08-23
+
+### Fixed — re-running the installer now actually updates you
+
+**This is the big one.** Until now, re-running the installer on a machine that
+already had LeRoy only ever *added* files. Anything we'd **fixed** was skipped,
+and anything we'd **removed** stayed behind. If you installed early, you were
+quietly stuck on your original versions of every file — collecting new features
+while keeping old, already-fixed ones. That's a mixed-version install, and it's
+arguably worse than not updating at all.
+
+Re-running the installer is now a real update:
+
+- **Fixes reach you.** A LeRoy file you never edited is replaced with the
+  current version.
+- **Your edits are never overwritten.** LeRoy records a hash of everything it
+  installs (`~/.claude/.leroy-overlay.json`), so it can tell a file *you*
+  changed from one that's merely out of date. Files you changed are kept, and
+  the new version is written beside them as `<name>.leroy-new` to diff at your
+  leisure.
+- **Retired files are cleaned up**, so you stop accumulating dead agents and
+  skills — but only when you never touched them.
+- **`settings.json`, `SOUL.md`, `USER.md` and `MEMORY.md` are never
+  overwritten.** Settings are still merged key by key, your values winning, your
+  hooks preserved. Your `memory/` vault is not part of the overlay and is never
+  touched.
+- **`--dry-run`** shows the whole plan and writes nothing. **`--keep-local`**
+  keeps your versions of everything on the first upgrade.
+
+Full details, including undo: **[UPGRADING.md](UPGRADING.md)**.
+
+> **Upgrading from an older install?** There's no record yet of what we gave
+> you, so LeRoy can't prove whether a changed file is your edit or just old. It
+> refreshes those files and keeps the previous copy beside each as
+> `<name>.leroy-bak` (plus the usual full backup). Prefer to review yourself?
+> Re-run with `--keep-local`. This applies once — after that your edits are
+> detected precisely.
+
+### Fixed — installer robustness
+
+- **Two installer runs in the same second no longer crash.** The backup folder
+  is named to the second, so a quick re-run hit `FileExistsError` and died
+  partway. Now the name is made unique. This mattered little when installing
+  was a one-time act; it matters a lot now that re-running is how you update.
+- **A no-op update no longer copies your whole config.** Runs that change
+  nothing skip the backup entirely, so checking for updates is free instead of
+  leaving a pile of identical backup folders behind.
+
+## v0.1.10.1 — 2026-07-29
+
+### Added — the memory engine (shipped, previously unlogged)
+
+This landed on 2026-07-29 and never got a changelog entry. Recording it now.
+
+Recall became **measured**: a benchmark ships with the engine
+(`eval_recall.py`), scores retrieval against a gold set, and prints a number you
+can reproduce on your own vault. Against it, this release delivered a **>30×
+improvement in retrieval accuracy**, and because the benchmark travels with the
+code, later changes are held to it automatically.
+
+Three things drive it: queries are embedded in the same vector space as your
+notes, ranking scores the full candidate pool instead of a pre-filtered slice,
+and the weights favour specific, contextually relevant notes over generic ones.
+Also included: memory lifecycle tiers and three safety hooks.
+
+
 ## v0.1.10 — 2026-07-23
 
 ### Fixed — fresh-install experience (onboarding, sessions, and the board room)

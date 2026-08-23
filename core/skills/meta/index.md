@@ -30,6 +30,7 @@ Skills about managing skills, permissions, disambiguation, and universal pattern
 | working memory, memory manager, session memory | working-memory-manager.md |
 | create agent, new agent, agent template, agent creator | agent-creator.md |
 | sub-agent, background agent, spawn agent, parallel agent, Task tool | sub-agent-spawning.md |
+| agent return contract, empty agent return, agent went idle, agent didn't report | agent-return-contract.md |
 | create skill, new skill, skill template, write skill | skill-creator.md |
 | install skill, classify skill, skill shopping, skill inventory | skill-shopping.md |
 | pagination, MCP pagination, fetch all pages, complete dataset | mcp-pagination.md |
@@ -113,6 +114,7 @@ Skills about managing skills, permissions, disambiguation, and universal pattern
 - **auto-builder.md** - Automatic skill/agent generation, growth monitor integration
 - **skill-composer.md** - Auto-generate simple skills in under 60 seconds
 - **kb-auto-ingestion-protocol.md** - Automated 7-stage KB ingestion (CKO, vault, skills, indexes, orphan prevention)
+- **agent-return-contract.md** - Required deliverable shape, timeout, and re-prompt-once rule for spawned agents. Enforced by `hooks/agent-return-validator.py` on SubagentStop
 
 ### MCP Integration Ecosystem (v1.0)
 - **mcp-pagination.md** - Universal MCP pagination patterns, page size reference, iteration logic
