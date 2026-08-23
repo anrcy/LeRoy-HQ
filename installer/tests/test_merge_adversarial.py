@@ -243,6 +243,35 @@ _r = run(sM, dM)
 check("traversal key rejected; file outside dest untouched",
       outside.exists() and _r.returncode == 0, f"rc={_r.returncode}")
 
+
+print("\n[17] an unreadable SOURCE file must never license a DELETE in dest")
+# Regression for a bug introduced BY the fix to unreadable-source crashes:
+# `continue` ran before seen.add(key), so a locked overlay file made the
+# removal loop delete the user's correctly-installed copy. Exit 0, reported
+# as "no longer part of LeRoy".
+try:
+    import msvcrt
+except ImportError:
+    msvcrt = None
+if msvcrt is None:
+    print("  SKIP  (byte-range locking is Windows-only)")
+else:
+    sN, dN = base / "sN", base / "dN"
+    mk(sN, {"agents/a.md": "a1\n", "agents/keep.md": "k\n"})
+    run(sN, dN)
+    fh = open(sN / "agents/a.md", "r+b")
+    msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+    try:
+        rr = run(sN, dN)
+    finally:
+        msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+        fh.close()
+    check("installed copy survives an unreadable source file",
+          (dN / "agents/a.md").exists(), "DELETED")
+    man3 = json.loads((dN / ".leroy-overlay.json").read_text())["files"]
+    check("its manifest key is retained", "agents/a.md" in man3, sorted(man3))
+    check("run still succeeds", rr.returncode == 0, rr.returncode)
+
 print(f"\n{len(passes)} passed, {len(fails)} failed")
 if fails:
     print("FAILED: " + "; ".join(fails))

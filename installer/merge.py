@@ -36,6 +36,7 @@ import argparse
 import datetime as _dt
 import hashlib
 import json
+import os
 import re
 import shutil
 import sys
@@ -285,6 +286,9 @@ class MergePlan:
         # so every one of them gets a per-file .leroy-bak if we do overwrite it.
         self.no_baseline: set = set()
         self.settings_write: bool = False  # settings.json will be rewritten
+        # Overlay files we could not read this run. Never a licence to change
+        # anything in dest — we simply could not verify them.
+        self.unreadable_source: list = []
         self.keep_local: bool = False
         self.source_hashes: dict[str, str] = {}
         # (rel, reason) for files we could not write — read-only, locked by
@@ -340,10 +344,18 @@ def build_plan(source: Path, dest: Path, keep_local: bool = False) -> MergePlan:
             continue
 
         key = rel.as_posix()
+        # `seen` means "the overlay SHIPS this path", which is true whether or
+        # not we can read it. It MUST be recorded before any early exit: the
+        # removal loop below deletes manifest keys missing from `seen`, so
+        # skipping this line let an unreadable SOURCE file license deleting the
+        # user's correctly-installed DEST copy.
+        seen.add(key)
         src_hash = _sha256(path)
         if src_hash is None:
-            continue  # cannot read our own overlay file; skip rather than crash
-        seen.add(key)
+            # Locked by AV/indexer/editor, on a disconnected share, or an
+            # unhydrated cloud-sync placeholder. Leave dest alone and say so.
+            plan.unreadable_source.append(rel)
+            continue
         plan.source_hashes[key] = src_hash
         target = dest / rel
 
@@ -366,8 +378,16 @@ def build_plan(source: Path, dest: Path, keep_local: bool = False) -> MergePlan:
             continue
 
         if key in USER_AUTHORED:
-            # Differs and is a user-owned surface -> never a blind overwrite.
-            plan.conflicts.append(rel)
+            # A user-owned surface. If the manifest proves it is byte-for-byte
+            # what we installed, the user never touched it and it can update
+            # cleanly. Otherwise it is theirs. Checking the baseline FIRST
+            # matters: short-circuiting straight to conflicts would leave every
+            # user a fresh .leroy-new on every release, forever.
+            _b = manifest.get(key)
+            if _b is not None and tgt_hash == _b:
+                plan.updated.append(rel)
+            else:
+                plan.conflicts.append(rel)
             continue
 
         base = manifest.get(key)
@@ -396,9 +416,13 @@ def build_plan(source: Path, dest: Path, keep_local: bool = False) -> MergePlan:
     # Compare case-insensitively too: on Windows a case-only rename yields a NEW
     # key plus an old key not in `seen`, and both resolve to the SAME file — so a
     # naive check installs the file and then deletes it in the same run.
-    seen_ci = {k.lower() for k in seen}
+    # os.path.normcase is exactly the right tool: it lowercases on Windows and
+    # is the identity on POSIX. Lowercasing unconditionally would suppress a
+    # genuine retirement of Foo.md on a case-SENSITIVE filesystem, where Foo.md
+    # and foo.md really are different files.
+    seen_ci = {os.path.normcase(k) for k in seen}
     for key, base in manifest.items():
-        if key in seen or key.lower() in seen_ci or base == USER_OWNED:
+        if key in seen or os.path.normcase(key) in seen_ci or base == USER_OWNED:
             continue
         target = dest / key
         if not target.exists():
@@ -568,6 +592,14 @@ def apply_plan(source: Path, dest: Path, plan: MergePlan, interpreter: str | Non
     for rel in plan.orphan_kept:
         new_manifest.setdefault(rel.as_posix(), USER_OWNED)
 
+    # Files we could not read this run keep whatever we recorded last time.
+    # Dropping them would make the next run treat an installed file as one we
+    # never shipped.
+    for rel in plan.unreadable_source:
+        key = rel.as_posix()
+        if key in prior:
+            new_manifest.setdefault(key, prior[key])
+
     write_manifest(dest, new_manifest)
 
 
@@ -627,6 +659,8 @@ def print_plan(plan: MergePlan, source: Path, dest: Path, dry_run: bool, backup_
     _bucket(DEL, plan.removed, "file(s) to remove (no longer part of LeRoy):")
     _bucket(SKIP, plan.orphan_kept, "retired file(s) you had edited - left alone:")
     _bucket(SKIP, plan.kept, "protected file(s) - never touched:")
+    _bucket(CONF, plan.unreadable_source,
+            "file(s) LeRoy could not read this run - your copies left untouched:")
     if plan.unchanged:
         print(f"  {SKIP} {len(plan.unchanged)} file(s) already up to date.")
         print()
