@@ -140,7 +140,9 @@ irm https://raw.githubusercontent.com/Zeekeey-jpeg/LeRoy-HQ/main/install.ps1 | i
 
 It updates in place. Fixes land, retired files are cleaned up, and **anything you edited
 yourself is kept** — the new version is written beside it as `.leroy-new` for you to merge.
-Your memory vault and `settings.json` are never overwritten. Add `--dry-run` to preview.
+Your memory vault and `settings.json` are never overwritten. To preview first, run
+`python installer/merge.py --dry-run` from the checkout — it prints the whole plan
+and writes nothing.
 
 → **[UPGRADING.md](UPGRADING.md)** — what gets touched, how to undo it, and the one
 special case for installs from before `v0.1.11`.
