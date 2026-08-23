@@ -41,6 +41,12 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Installer merge tests (data-loss guarantees)
+        run: |
+          set -e
+          python installer/tests/test_merge.py
+          python installer/tests/test_merge_adversarial.py
+
       - name: Compile all Python files
         run: |
           set -e

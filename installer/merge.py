@@ -247,6 +247,10 @@ class MergePlan:
         self.had_manifest: bool = False   # False on the first upgrade of an old install
         self.keep_local: bool = False
         self.source_hashes: dict[str, str] = {}
+        # (rel, reason) for files we could not write — read-only, locked by
+        # another process, permissions. Collected, never fatal: one bad file
+        # must not abort an otherwise good update and leave a half-written config.
+        self.failed: list[tuple] = []
 
     @property
     def skipped(self) -> list[Path]:
@@ -402,10 +406,12 @@ def apply_plan(source: Path, dest: Path, plan: MergePlan, interpreter: str | Non
 
     # 1. files we've never placed, plus ones we own that went missing
     for rel in list(plan.new_files) + list(plan.readded):
-        src = source / rel
-        tgt = dest / rel
-        tgt.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(src, tgt)
+        try:
+            tgt = dest / rel
+            tgt.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source / rel, tgt)
+        except OSError as e:
+            plan.failed.append((rel, _why(e)))
 
     # 2. THE UPDATE: overwrite files that are ours and untouched. On the first
     #    upgrade of a pre-manifest install we also drop a per-file .leroy-bak,
@@ -417,21 +423,29 @@ def apply_plan(source: Path, dest: Path, plan: MergePlan, interpreter: str | Non
                 shutil.copy2(tgt, tgt.with_name(tgt.name + ".leroy-bak"))
             except OSError:
                 pass  # a backup we couldn't write must never block the update
-        tgt.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source / rel, tgt)
+        try:
+            tgt.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source / rel, tgt)
+        except OSError as e:
+            plan.failed.append((rel, _why(e)))
 
     # 3. user-modified: never overwrite. Park the new version alongside.
     for rel in plan.conflicts:
-        side = (dest / rel).with_name((dest / rel).name + ".leroy-new")
-        side.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source / rel, side)
+        try:
+            side = (dest / rel).with_name((dest / rel).name + ".leroy-new")
+            side.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source / rel, side)
+        except OSError as e:
+            plan.failed.append((rel, _why(e)))
 
     # 4. propagate removals (only files proven untouched in build_plan)
     for rel in plan.removed:
         try:
             (dest / rel).unlink()
-        except OSError:
-            pass
+        except FileNotFoundError:
+            pass  # already gone; nothing to do
+        except OSError as e:
+            plan.failed.append((rel, _why(e)))
 
     # settings.json - start from the user's existing settings (or empty), then
     # apply the root overlay (if any) and the hook wiring. Written once at the
@@ -463,7 +477,11 @@ def apply_plan(source: Path, dest: Path, plan: MergePlan, interpreter: str | Non
     # PROTECTED) keep their old baseline — or are marked USER_OWNED — so they
     # stay the user's on every future run.
     prior = load_manifest(dest)
-    hands_off = {r.as_posix() for r in plan.conflicts} | {r.as_posix() for r in plan.kept}
+    # A file we failed to write is NOT installed. Recording our hash for it
+    # would make the next run believe it is current and skip it forever.
+    hands_off = ({r.as_posix() for r in plan.conflicts}
+                 | {r.as_posix() for r in plan.kept}
+                 | {r.as_posix() for r, _ in plan.failed})
     new_manifest: dict[str, str] = {}
     for key, digest in plan.source_hashes.items():
         if key in hands_off:
@@ -471,6 +489,16 @@ def apply_plan(source: Path, dest: Path, plan: MergePlan, interpreter: str | Non
         else:
             new_manifest[key] = digest
     write_manifest(dest, new_manifest)
+
+
+def _why(e: OSError) -> str:
+    """Plain-language reason, so a user sees the cause and not a stack trace."""
+    import errno
+    if isinstance(e, PermissionError) or getattr(e, "errno", None) == errno.EACCES:
+        return "permission denied (file is read-only, or open in another program)"
+    if getattr(e, "errno", None) == errno.ENOSPC:
+        return "no space left on device"
+    return f"{type(e).__name__}: {e}"
 
 
 def _load_json(path: Path) -> dict:
@@ -532,8 +560,24 @@ def print_plan(plan: MergePlan, source: Path, dest: Path, dry_run: bool, backup_
     if plan.hooks_merge:
         print(f"  {MERGE} hooks: {plan.hooks_merge}")
     print("  " + "-" * 60)
+    if plan.failed:
+        print()
+        print(f"  {CONF} {len(plan.failed)} file(s) COULD NOT be written:")
+        for rel, why in plan.failed[:20]:
+            print(f"      {CONF} {rel.as_posix()} - {why}")
+        if len(plan.failed) > 20:
+            print(f"      ... and {len(plan.failed) - 20} more")
+        print()
+        print("  Everything else applied. These files are NOT recorded as updated,")
+        print("  so re-running the installer retries them once the cause is cleared")
+        print("  (close the program holding them, or clear the read-only flag).")
+        print("  " + "-" * 60)
+
     if dry_run:
         print("  Dry run complete. Re-run without --dry-run to apply.\n")
+    elif plan.failed:
+        print(f"  Merge finished with {len(plan.failed)} problem(s) - see above.")
+        print()
     else:
         print(f"  {OK}  Merge complete.\n")
 
