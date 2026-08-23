@@ -35,21 +35,21 @@
 
 *A living log so you can see the system is actively growing, not a one-time drop.*
 
-**2026-08-23 — Re-running the installer now actually updates you**
-If you installed LeRoy early, you were quietly stuck. Re-running the installer only ever
-*added* files — everything we'd **fixed** was skipped and everything we'd **removed** stayed
-behind, so you collected new features while keeping old, already-fixed ones.
+**2026-08-23 — One command, and your whole system is current**
 
-That's fixed. LeRoy now records a fingerprint of every file it installs, which lets it tell a
-file **you** edited from one that's merely out of date. Untouched files get updated, retired
-ones get cleaned up, and **your edits are never overwritten** — the new version lands beside
-them as `.leroy-new` so you can merge on your own terms. `settings.json`, `SOUL.md`, `USER.md`
-and your memory vault are never touched. `--dry-run` shows the whole plan without writing
-anything.
+LeRoy now updates itself in place. Re-run the installer and every improvement lands on
+your machine — sharpened agents, new skills, hardened hooks — while everything you have
+customised stays exactly as you left it.
 
-Two installer bugs went with it: running the installer twice in the same second used to crash
-outright, and a run that changed nothing still copied your entire config. Checking for updates
-is now free. → [UPGRADING.md](UPGRADING.md)
+It works because LeRoy fingerprints what it installs, so it can tell your work from its
+own. Files you have edited are never touched; the newer version arrives alongside as
+`.leroy-new`, yours to fold in whenever you choose. Components LeRoy has moved past are
+tidied away automatically, so your install stays lean instead of collecting layers.
+`settings.json`, `SOUL.md`, `USER.md` and your memory vault are always yours alone.
+
+Preview anything before it happens with `--dry-run`: it prints the complete plan and
+writes nothing. Checking for updates is instant, and costs you nothing when there is
+nothing new. → [UPGRADING.md](UPGRADING.md)
 
 **2026-07-29 — Memory that finds the right thing, with a benchmark to prove it**
 The biggest upgrade yet to how LeRoy remembers. Recall is now **measured**: a benchmark ships
