@@ -660,7 +660,7 @@ def print_plan(plan: MergePlan, source: Path, dest: Path, dry_run: bool, backup_
     _bucket(SKIP, plan.orphan_kept, "retired file(s) you had edited - left alone:")
     _bucket(SKIP, plan.kept, "protected file(s) - never touched:")
     _bucket(CONF, plan.unreadable_source,
-            "file(s) LeRoy could not read this run - your copies left untouched:")
+            "file(s) LeRoy could not read this run - left exactly as they are; re-run to pick them up:")
     if plan.unchanged:
         print(f"  {SKIP} {len(plan.unchanged)} file(s) already up to date.")
         print()
